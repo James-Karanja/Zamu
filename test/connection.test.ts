@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_DB_PATH, databasePath, openDatabase } from '../src/db/connection.ts';
+import { DuplicatePhoneError, addHousehold } from '../src/store/registry.ts';
 import { tempDir } from './helpers.ts';
 
 function withEnv(t: { after: (fn: () => void) => void }, value: string | undefined): void {
@@ -43,6 +45,25 @@ test('opening creates missing parent directories', (t) => {
   const db = openDatabase(path);
   t.after(() => db.close());
   assert.equal((db.prepare('SELECT COUNT(*) AS n FROM cases').get() as { n: number }).n, 0);
+});
+
+test('one household per phone number, even on a database made before the rule', (t) => {
+  const path = join(tempDir(t), 'legacy.db');
+  // The shape households had before uniqueness was introduced.
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`CREATE TABLE households (
+    id TEXT PRIMARY KEY, guardian_name TEXT NOT NULL, phone TEXT NOT NULL,
+    language TEXT NOT NULL CHECK (language IN ('sw', 'en')));`);
+  legacy.prepare("INSERT INTO households VALUES ('HH-1', 'First', '+254700000001', 'en')").run();
+  legacy.close();
+
+  const db = openDatabase(path);
+  t.after(() => db.close());
+  assert.throws(
+    () => addHousehold(db, { id: 'HH-2', guardianName: 'Second', phone: '+254700000001', language: 'en' }),
+    DuplicatePhoneError,
+    'a table constraint would not reach this database; the unique index does',
+  );
 });
 
 test('an in-memory database applies the schema', (t) => {

@@ -4,7 +4,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import { type Language, t } from '../i18n/strings.ts';
 import { type QueueEntry, rankRound } from '../queue/ranking.ts';
 import { MAX_SCORE, scoreNeed } from '../scoring/model.ts';
-import { type EvidenceInput, createCase, getCase, requestVerification } from '../store/cases.ts';
+import {
+  type EvidenceInput, DuplicateApplicationError, RoundNotOpenError, createCase, getCase, requestVerification,
+} from '../store/cases.ts';
 
 /** USSD screens are limited by the network; Africa's Talking allows 182 characters. */
 export const MAX_SCREEN = 182;
@@ -15,6 +17,8 @@ export const EVIDENCE_FRESH_DAYS = 180;
 export interface UssdRequest {
   phoneNumber: string;
   text: string;
+  /** Injectable clock, so evidence-freshness behaviour is testable rather than wall-clock dependent. */
+  now?: number;
 }
 
 export interface UssdReply {
@@ -78,21 +82,73 @@ function evidenceOnFile(db: DatabaseSync, childId: string): EvidenceInput | unde
   };
 }
 
-const isStale = (capturedAt: string, now = Date.now()) =>
-  now - Date.parse(capturedAt) > EVIDENCE_FRESH_DAYS * 24 * 60 * 60 * 1000;
+/** Evidence of unknown age counts as stale: a visit is cheaper than a wrong award. */
+export function isStale(capturedAt: string, now: number = Date.now()): boolean {
+  const captured = Date.parse(capturedAt);
+  return Number.isNaN(captured) || now - captured > EVIDENCE_FRESH_DAYS * 24 * 60 * 60 * 1000;
+}
 
 /**
- * Lists every child on one screen. Names are shortened to fit rather than options dropped:
- * a parent must never be offered a number the menu cannot show.
+ * A gateway may post the caller's number with an unencoded `+`, which form decoding turns
+ * into a space. Restore it rather than failing to recognise the household.
  */
-function childMenu(language: Language, children: Child[]): string {
-  const header = t(language, 'chooseChild', { list: '' });
-  const numbering = children.reduce((n, _, i) => n + `${i + 1}. \n`.length, 0);
-  const budget = Math.max(Math.floor((MAX_SCREEN - 4 - header.length - numbering) / Math.max(children.length, 1)), 6);
-  const list = children
-    .map((child, i) => `${i + 1}. ${child.name.length > budget ? `${child.name.slice(0, budget - 1)}.` : child.name}`)
-    .join('\n');
-  return t(language, 'chooseChild', { list });
+export function normalisePhone(raw: string): string {
+  const trimmed = raw.trim();
+  return /^\d{9,15}$/.test(trimmed) ? `+${trimmed}` : trimmed;
+}
+
+const MIN_NAME = 6;
+
+/**
+ * One page of the child list. Names are shortened to fit, and when even shortened names will
+ * not fit, the page ends with a "More" option — a parent must never be offered a number the
+ * menu cannot show.
+ */
+function childPage(
+  language: Language,
+  children: Child[],
+  page: number,
+  prefix = '',
+): { shown: Child[]; offset: number; screen: string; hasMore: boolean } {
+  const header = prefix + t(language, 'chooseChild', { list: '' });
+  const more = t(language, 'morePrompt');
+  const budget = MAX_SCREEN - 4 - header.length;
+
+  let offset = 0;
+  for (let p = 0; p < page; p++) {
+    const fit = countThatFit(children, offset, budget, more);
+    if (offset + fit >= children.length) break;
+    offset += fit;
+  }
+  const fit = countThatFit(children, offset, budget, more);
+  const shown = children.slice(offset, offset + fit);
+  const hasMore = offset + fit < children.length;
+
+  const numbering = shown.reduce((n, _, i) => n + `${offset + i + 1}. \n`.length, 0);
+  const nameBudget = Math.max(
+    Math.floor((budget - numbering - (hasMore ? more.length + 1 : 0)) / Math.max(shown.length, 1)),
+    MIN_NAME,
+  );
+  const lines = shown.map(
+    (child, i) =>
+      `${offset + i + 1}. ${child.name.length > nameBudget ? `${child.name.slice(0, nameBudget - 1)}.` : child.name}`,
+  );
+  if (hasMore) lines.push(more);
+  return { shown, offset, screen: prefix + t(language, 'chooseChild', { list: lines.join('\n') }), hasMore };
+}
+
+/** How many entries fit from `offset`, at the minimum readable name width. */
+function countThatFit(children: Child[], offset: number, budget: number, more: string): number {
+  let used = 0;
+  let count = 0;
+  for (let i = offset; i < children.length; i++) {
+    const line = `${i + 1}. ${children[i].name.slice(0, MIN_NAME)}\n`.length;
+    const needsMore = i + 1 < children.length ? more.length + 1 : 0;
+    if (used + line + needsMore > budget) break;
+    used += line;
+    count++;
+  }
+  return Math.max(count, 1);
 }
 
 function pick<T>(items: T[], choice: string | undefined): T | undefined {
@@ -102,7 +158,8 @@ function pick<T>(items: T[], choice: string | undefined): T | undefined {
 
 /** Renders the screen for the keypresses so far. Writes only when the parent consents. */
 export function respond(db: DatabaseSync, request: UssdRequest): UssdReply {
-  const phone = request.phoneNumber.trim();
+  const phone = normalisePhone(request.phoneNumber);
+  const now = request.now ?? Date.now();
   const household = householdOf(db, phone);
   if (!household) return end(t('en', 'notRegistered'));
 
@@ -113,24 +170,44 @@ export function respond(db: DatabaseSync, request: UssdRequest): UssdReply {
   const children = childrenOf(db, household.id);
   const parent = { id: household.id, role: 'parent' as const };
   const steps = request.text ? request.text.split('*') : [];
-  const [choice, second, third] = steps;
-
-  const addChild = (childId: string | null, reason: 'new_child' | 'no_evidence', note: string) => {
-    requestVerification(db, { phone, childId, reason, note, actor: parent });
-  };
+  const [choice, ...rest] = steps;
 
   if (!choice) return con(t(language, 'menu', { round: round.name }));
 
   // 1 = apply, 2 = my place, 3 = my score, 4 = add a child
   if (choice === '1' || choice === '2' || choice === '3') {
-    // A household with nothing on file must not be trapped in an empty child menu.
     if (children.length === 0) {
-      addChild(null, 'new_child', 'Registered household has no child on file');
+      // Only applying implies a new child; checking a place or score must not queue a visit.
+      if (choice !== '1') return end(t(language, 'noCase', { child: '' }).trim());
+      requestVerification(db, {
+        phone,
+        roundId: round.id,
+        reason: 'new_child',
+        note: 'Registered household has no child on file',
+        actor: parent,
+      });
       return end(t(language, 'addChild'));
     }
-    if (!second) return con(childMenu(language, children));
-    const child = pick(children, second);
-    if (!child) return con(`${t(language, 'invalid')}\n${childMenu(language, children)}`);
+
+    // `0` pages the child list; the first other key is the selection.
+    let page = 0;
+    let selection: string | undefined;
+    const afterSelection: string[] = [];
+    for (const step of rest) {
+      if (selection === undefined) {
+        if (step === '0') page++;
+        else selection = step;
+      } else afterSelection.push(step);
+    }
+
+    const { shown, offset, screen } = childPage(language, children, page);
+    if (selection === undefined) return con(screen);
+
+    const child = pick(children, selection);
+    const onThisPage = child !== undefined && children.indexOf(child) >= offset && children.indexOf(child) < offset + shown.length;
+    if (!child || !onThisPage) {
+      return con(childPage(language, children, page, `${t(language, 'invalid')}\n`).screen);
+    }
 
     // One ranking pass answers "has this child applied", "where are they" and "what did they score".
     const ranked = rankRound(db, round.id);
@@ -179,38 +256,77 @@ export function respond(db: DatabaseSync, request: UssdRequest): UssdReply {
 
     const evidence = evidenceOnFile(db, child.id);
     if (!evidence) {
-      addChild(child.id, 'no_evidence', `Home visit needed before ${child.id} can apply`);
-      return end(t(language, 'needsVisit', { child: child.name }));
-    }
-
-    if (!third) return con(t(language, 'consent', { child: child.name }));
-    if (third === '2') return end(t(language, 'declined'));
-    if (third !== '1') return con(`${t(language, 'invalid')}\n${t(language, 'consent', { child: child.name })}`);
-
-    const caseId = createCase(db, { roundId: round.id, childId: child.id, evidence, actor: parent });
-    // The application reuses the last capture, so ask for a fresh visit when it has aged out.
-    if (isStale(evidence.capturedAt)) {
       requestVerification(db, {
         phone,
         childId: child.id,
+        roundId: round.id,
+        reason: 'no_evidence',
+        note: `Home visit needed before ${child.id} can apply`,
+        actor: parent,
+      });
+      return end(t(language, 'needsVisit', { child: child.name }));
+    }
+
+    const consent = afterSelection[0];
+    if (!consent) return con(t(language, 'consent', { child: child.name }));
+    if (consent === '2') return end(t(language, 'declined'));
+    if (consent !== '1') return con(`${t(language, 'invalid')}\n${t(language, 'consent', { child: child.name })}`);
+
+    let caseId: string;
+    try {
+      caseId = createCase(db, { roundId: round.id, childId: child.id, evidence, actor: parent });
+    } catch (err) {
+      // A parent who just consented deserves a real answer, not "service unavailable".
+      if (err instanceof DuplicateApplicationError) {
+        const already = rankRound(db, round.id).find((e) => e.childId === child.id);
+        return end(
+          already
+            ? t(language, 'alreadyApplied', {
+                child: child.name,
+                caseId: already.caseId,
+                position: already.position,
+                total: ranked.length,
+              })
+            : t(language, 'tryAgain'),
+        );
+      }
+      if (err instanceof RoundNotOpenError) return end(t(language, 'noOpenRound'));
+      throw err;
+    }
+
+    // The application reuses the last capture, so ask for a fresh visit when it has aged out.
+    if (isStale(evidence.capturedAt, now)) {
+      requestVerification(db, {
+        phone,
+        childId: child.id,
+        roundId: round.id,
         reason: 'stale_evidence',
         note: `Evidence for ${child.id} last captured ${evidence.capturedAt}; re-visit before award`,
         actor: parent,
       });
     }
-    const place = rankRound(db, round.id).find((e) => e.caseId === caseId);
+
+    // Re-rank after the write: another application may have landed while this session ran.
+    const after = rankRound(db, round.id);
+    const place = after.find((e) => e.caseId === caseId);
     return end(
       t(language, 'applied', {
         caseId,
         child: child.name,
-        position: place?.position ?? ranked.length + 1,
-        total: ranked.length + 1,
+        position: place?.position ?? after.length,
+        total: after.length,
       }),
     );
   }
 
   if (choice === '4') {
-    addChild(null, 'new_child', 'Parent asked to add a child not on file');
+    requestVerification(db, {
+      phone,
+      roundId: round.id,
+      reason: 'new_child',
+      note: 'Parent asked to add a child not on file',
+      actor: parent,
+    });
     return end(t(language, 'addChild'));
   }
 

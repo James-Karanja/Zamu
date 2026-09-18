@@ -18,10 +18,13 @@ CREATE TABLE IF NOT EXISTS households (
   id            TEXT PRIMARY KEY,
   guardian_name TEXT NOT NULL CHECK (length(trim(guardian_name)) > 0),
   phone         TEXT NOT NULL CHECK (length(trim(phone)) > 0),
-  language      TEXT NOT NULL CHECK (language IN ('sw', 'en')),
-  -- One household per number: the USSD session has no other way to tell them apart.
-  UNIQUE (phone)
+  language      TEXT NOT NULL CHECK (language IN ('sw', 'en'))
 );
+
+-- One household per number: the USSD session has no other way to tell them apart.
+-- Declared as an index, not a table constraint, so it also applies to databases
+-- created before this rule existed.
+CREATE UNIQUE INDEX IF NOT EXISTS households_phone_unique ON households(phone);
 
 CREATE TABLE IF NOT EXISTS children (
   id           TEXT PRIMARY KEY,
@@ -106,6 +109,7 @@ CREATE TABLE IF NOT EXISTS verification_requests (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   phone      TEXT NOT NULL CHECK (length(trim(phone)) > 0),
   child_id   TEXT REFERENCES children(id),
+  round_id   TEXT REFERENCES rounds(id),
   reason     TEXT NOT NULL CHECK (reason IN ('stale_evidence', 'no_evidence', 'new_child')),
   note       TEXT NOT NULL CHECK (length(trim(note)) > 0),
   actor_id   TEXT NOT NULL CHECK (length(trim(actor_id)) > 0),
@@ -114,6 +118,12 @@ CREATE TABLE IF NOT EXISTS verification_requests (
 );
 
 CREATE INDEX IF NOT EXISTS verification_requests_by_phone ON verification_requests(phone);
+
+-- Two volunteers must never be sent to the same household for the same reason in the same
+-- round; the check in requestVerification cannot be trusted alone under concurrent writes.
+CREATE UNIQUE INDEX IF NOT EXISTS verification_requests_unique
+  ON verification_requests(phone, reason, ifnull(child_id, ''), ifnull(round_id, ''))
+  WHERE child_id IS NOT NULL;
 
 CREATE TRIGGER IF NOT EXISTS verification_requests_no_update BEFORE UPDATE ON verification_requests
 BEGIN SELECT RAISE(ABORT, 'immutable record'); END;

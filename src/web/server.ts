@@ -80,9 +80,10 @@ export function createServer(db: DatabaseSync): Server {
   return createHttpServer((req, res) => {
     try {
       handle(db, req, res);
-    } catch {
-      // Never leak a stack trace or database detail to a public visitor.
-      if (res.headersSent) res.destroy();
+    } catch (err) {
+      // Never leak a stack trace or database detail to a public visitor — log it instead.
+      console.error('Queue page request failed:', err);
+      if (res.headersSent || res.destroyed || res.writableEnded) res.destroy();
       else send(res, 500, HTML, renderNotFound('Something went wrong.'));
     }
   });

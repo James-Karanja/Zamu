@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { closeRound, createCase, recordStage } from '../src/store/cases.ts';
+import { closeRound, createCase, recordStage, requestVerification } from '../src/store/cases.ts';
 import { CHV, CLERK, PARENT, evidence, freshDb } from './helpers.ts';
 
 const APPEND_ONLY = {
@@ -25,6 +25,11 @@ const APPEND_ONLY = {
     replace: `INSERT OR REPLACE INTO round_events (id, round_id, type, actor_id, actor_role, at)
               VALUES (1, 'R-T', 'closed', 'X', 'clerk', '2026-05-04T08:00:00.000Z')`,
   },
+  verification_requests: {
+    update: "UPDATE verification_requests SET note = 'edited'",
+    replace: `INSERT OR REPLACE INTO verification_requests (id, phone, child_id, round_id, reason, note, actor_id, actor_role, at)
+              VALUES (1, '+254700000999', NULL, NULL, 'new_child', 'rewritten', 'X', 'parent', '2026-05-04T08:00:00.000Z')`,
+  },
   rounds: {
     update: 'UPDATE rounds SET budget = 999999',
     replace: `INSERT OR REPLACE INTO rounds (id, name, ward, currency, budget, created_at)
@@ -35,6 +40,8 @@ const APPEND_ONLY = {
 function seedOneCase(db: ReturnType<typeof freshDb>): string {
   const caseId = createCase(db, { roundId: 'R-T', childId: 'CH-A', evidence: evidence({ cattle: 7 }), actor: PARENT });
   recordStage(db, caseId, 'verified', CHV);
+  // Every append-only table needs a row, or a DELETE would pass on an empty table.
+  requestVerification(db, { phone: '+254700000999', reason: 'new_child', note: 'home visit please', actor: PARENT });
   return caseId;
 }
 

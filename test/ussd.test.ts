@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { openDatabase } from '../src/db/connection.ts';
-import { MAX_SCREEN, renderReply, respond, type UssdReply } from '../src/ussd/session.ts';
+import { MAX_SCREEN, isStale, renderReply, respond, type UssdReply } from '../src/ussd/session.ts';
 import { listCurrentCases, listVerificationRequests } from '../src/store/cases.ts';
 import { scoreNeed } from '../src/scoring/model.ts';
 import { rankRound } from '../src/queue/ranking.ts';
@@ -265,4 +265,63 @@ test('the score screen reports the evidence the case was ranked on', (t) => {
   const reply = dial(db, phone, ['3', childIndexFor(db, phone, 'CH-005')]);
   const score = scoreNeed(record.evidence);
   assert.ok(reply.text.includes(`${score.total}/100`), `${reply.text} should carry ${score.total}`);
+});
+
+test('evidence inside the freshness window asks for no re-visit', (t) => {
+  const db = seeded(t);
+  const phone = phoneOf(db, DEMO_CHILD);
+  const index = childIndexFor(db, phone, DEMO_CHILD);
+  // The seeded capture is from the 2026 Term 1 round; pretend we are a week later.
+  const justAfter = Date.parse('2026-01-12T08:00:00.000Z');
+  for (const keys of [['1'], ['1', index], ['1', index, '1']]) {
+    respond(db, { phoneNumber: phone, text: keys.join('*'), now: justAfter });
+  }
+  assert.deepEqual(listVerificationRequests(db, phone).filter((r) => r.reason === 'stale_evidence'), []);
+});
+
+test('unreadable capture dates count as stale', () => {
+  assert.equal(isStale('not a date', Date.parse('2026-09-18T00:00:00.000Z')), true);
+  assert.equal(isStale('2026-09-17T00:00:00.000Z', Date.parse('2026-09-18T00:00:00.000Z')), false);
+});
+
+test('a household of twenty children can still reach every child', (t) => {
+  const db = seeded(t);
+  db.prepare("INSERT INTO households (id, guardian_name, phone, language) VALUES ('HH-20', 'Twenty', '+254700000902', 'en')").run();
+  for (let i = 0; i < 20; i++) {
+    db.prepare('INSERT INTO children (id, household_id, school_id, name, admission_no) VALUES (?, ?, ?, ?, ?)').run(
+      `CH-20-${i}`, 'HH-20', 'SCH-1', `Wanjiru Kariuki Number ${i}`, `ADM-20-${i}`,
+    );
+  }
+  const offered = new Set<number>();
+  let keys = ['1'];
+  for (let page = 0; page < 10; page++) {
+    const reply = respond(db, { phoneNumber: '+254700000902', text: keys.join('*') });
+    checkScreen(reply);
+    for (const match of reply.text.matchAll(/(?:^|\n)(\d+)\. /g)) offered.add(Number(match[1]));
+    if (!/0\. More/.test(reply.text)) break;
+    keys.push('0');
+  }
+  offered.delete(0);
+  assert.equal(offered.size, 20, `only offered: ${[...offered].sort((a, b) => a - b).join(',')}`);
+
+  // A number from an earlier page is not accepted while a later page is shown.
+  const reprompt = respond(db, { phoneNumber: '+254700000902', text: '1*0*1' });
+  assert.equal(reprompt.type, 'CON');
+  assert.match(reprompt.text, /Wrong choice/);
+});
+
+test('checking a place with no children on file does not queue a home visit', (t) => {
+  const db = seeded(t);
+  db.prepare("INSERT INTO households (id, guardian_name, phone, language) VALUES ('HH-EMPTY', 'Empty', '+254700000903', 'en')").run();
+  const reply = dial(db, '+254700000903', ['2']);
+  assert.equal(reply.type, 'END');
+  assert.equal(listVerificationRequests(db, '+254700000903').length, 0);
+});
+
+test('a number posted with an unencoded plus still finds the household', (t) => {
+  const db = seeded(t);
+  // `phoneNumber=+254...` decodes to a leading space when a gateway does not encode the plus.
+  const reply = respond(db, { phoneNumber: ' 254700000001', text: '' });
+  assert.equal(reply.type, 'CON');
+  assert.match(reply.text, /1\. Apply/);
 });

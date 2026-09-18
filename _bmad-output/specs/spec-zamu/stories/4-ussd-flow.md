@@ -4,7 +4,7 @@ type: 'feature'
 created: '2026-09-18'
 status: 'done'
 route: 'dispatch'
-review_loop_iteration: 1
+review_loop_iteration: 2
 baseline_commit: '7490800'
 context:
   - '{project-root}/_bmad-output/specs/spec-zamu/SPEC.md'
@@ -25,7 +25,7 @@ context:
 - Africa's Talking contract: `POST` form body of `sessionId`, `serviceCode`, `phoneNumber`, `text`; reply `text/plain` beginning `CON ` to continue or `END ` to finish. Session state is derived from the accumulated `text`, never stored.
 - Every screen is at most 182 characters, including the `CON `/`END ` prefix.
 - Menus and messages in the household's stored language, Swahili or English, from one shared strings module.
-- Parental consent screen before an application is created; declining creates nothing at all.
+- Parental consent screen before an application is created; declining creates nothing at all. (Asking for a home visit is itself a write, recorded when the parent asks for it.)
 - Applying takes at most three inputs after the menu appears, and no free text.
 - The parent's own score breakdown is available only here, keyed to their phone number; a household can only ever see its own children.
 - A child not on file produces an append-only verification request, and the session tells the parent what to bring and where — it never creates an unverified application.
@@ -90,7 +90,7 @@ context:
 - Seed change: `OPEN_ROUND_SKIPPED = [34, 35]` leaves two children who applied in earlier rounds out of the open round, so a live demo can apply for them over USSD and watch the queue move. The open round now holds 38 applications.
 - `src/ussd/server.ts` parses the Africa's Talking form body, answers `POST /ussd` only (405 + `Allow: POST` elsewhere), caps the body at 8 KB, and always returns a valid `END ` screen rather than an error page.
 - Verified live over HTTP: menu → child list → consent → `END Ombi limepokelewa. Kesi ZM-0106 ya Amani Mwangi. Nafasi 17 kati ya 39.`
-- 138 tests (was 105): `test/ussd.test.ts` walks every matrix row keypress by keypress, checking the prefix and length of every screen in both languages; `test/ussd-server.test.ts` covers the wire contract, malformed bodies, oversized bodies, wrong methods and a closed database.
+- 148 tests (was 105): `test/ussd.test.ts` walks every matrix row keypress by keypress, checking the prefix and length of every screen in both languages; `test/ussd-server.test.ts` covers the wire contract, malformed bodies, oversized bodies, wrong methods and a closed database.
 
 ## Spec Change Log
 
@@ -98,6 +98,31 @@ context:
 - **Review round 1 (patch tier).** Consent wording now matches what the code does (reuses the last capture) and stale evidence triggers a re-visit request; `verification_requests` gained `child_id`, `reason`, an index, de-duplication and the append-only triggers it was missing; `households.phone` is unique.
 
 ## Review Triage Log
+
+**Round 2** (the edge-case and verification-gap reviews, re-run after the rate limit reset):
+
+| # | Source | Finding | Verdict | Route | Evidence |
+|---|---|---|---|---|---|
+| 20 | edge, verif-gap | **Round-1 claim disproved:** `UNIQUE (phone)` inside `CREATE TABLE IF NOT EXISTS` never reaches an existing database | high | patch | Reproduced on a pre-change database. Moved to `CREATE UNIQUE INDEX`, with a test that builds the old schema and reopens it |
+| 21 | edge, verif-gap | **Round-1 claim disproved:** the child menu still dropped options past ~12 children while `pick` accepted them | high | patch | Real paging added (`0. More`); a 20-child test walks every page and asserts all 20 are reachable, and that an off-page number is refused |
+| 22 | verif-gap | `verification_requests` was missing from the append-only test table, so its triggers could be deleted silently | medium | patch | Added to `test/immutability.test.ts` with a seeded row |
+| 23 | verif-gap | Only "never stale" was pinned; collapsing the window to "always stale" passed | medium | patch | `now` is now injectable through `respond`; a test applies inside the window and asserts no re-visit |
+| 24 | edge | Checking place or score with no children on file queued a home visit and answered the wrong screen | medium | patch | Only applying implies a new child now |
+| 25 | edge | `createCase` errors reached the parent as "service unavailable" after they consented | medium | patch | `DuplicateApplicationError` and `RoundNotOpenError` now answer real screens |
+| 26 | edge | Dedupe swallowed a second genuinely-new child, while the reply still said "Recorded" | medium | patch | Scoped to (phone, reason, child, round): repeats are ignored, a new round is a fresh ask |
+| 27 | edge | Stale re-visits were never re-queued in a later round | medium | patch | Requests now carry `round_id` |
+| 28 | edge | Dedupe raced between the SELECT and INSERT | low | patch | Partial unique index added |
+| 29 | edge, verif-gap | An unencoded `+` in the gateway body lost the country prefix | medium | patch | `normalisePhone` restores it, with an HTTP test that posts a literal `+` |
+| 30 | edge | Unparsable capture dates counted as fresh | low | patch | Unknown age now counts as stale, tested |
+| 31 | edge | Writing to an aborted response raised an unhandled error | low | patch | Both servers check `destroyed`/`writableEnded` |
+| 32 | edge | `PORT=0`, `0x1f`, `1e3` were accepted | low | patch | Decimal-only, range 1–65535 |
+| 33 | edge | A corrupt database threw a raw stack trace past the friendly check | low | patch | `open` is guarded |
+| 34 | edge | Shutdown hung on gateway keep-alive sockets | low | patch | `closeAllConnections` plus a 5s fallback |
+| 35 | edge | `addHousehold` leaked a raw constraint error | low | patch | Typed `DuplicatePhoneError` |
+| 36 | edge | Position could be reported against a stale total | low | patch | Re-ranks after the write |
+| 37 | edge | The queue page's 500 handler logged nothing | low | patch | Logs server-side |
+| 38 | edge | Claim "writes only when the parent consents" was false for options 2/3/4 | medium | patch | Spec wording corrected: consent gates applications; verification requests are recorded when asked for |
+| 39 | edge | New-child requests name no child for the volunteer to visit | low | defer | Needs a name-capture step; USSD has no free text, so it belongs with the admin/CHV surface in story 6 |
 
 | # | Source | Finding | Verdict | Route | Evidence |
 |---|---|---|---|---|---|
@@ -120,7 +145,7 @@ context:
 | 17 | blind | Non-null assertions turned a data gap into an outage | low | patch | Optional chaining with sensible fallbacks |
 | 18 | blind | Stale test name after the seed changed to 38 applicants | low | patch | Renamed |
 | 19 | blind | Empty Spec Change Log despite a cross-story seed change | low | patch | Entry added |
-| — | edge-case, verification-gap | **Not run:** both reviewers failed with a session rate limit before reporting | — | — | Story 4 has had one review, not three; re-run after the limit resets |
+| — | edge-case, verification-gap | Round 1: both failed on a session rate limit; re-run in round 2 below | — | — | Story 4 has now had all three reviews |
 
 ## Verification
 

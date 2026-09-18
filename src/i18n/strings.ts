@@ -3,7 +3,8 @@ export type Language = 'sw' | 'en';
 
 export type MessageKey =
   | 'menu' | 'notRegistered' | 'noOpenRound' | 'chooseChild' | 'consent' | 'declined'
-  | 'applied' | 'alreadyApplied' | 'place' | 'noCase' | 'score' | 'addChild' | 'needsVisit' | 'invalid';
+  | 'applied' | 'alreadyApplied' | 'place' | 'noCase' | 'score' | 'addChild' | 'needsVisit' | 'invalid'
+  | 'morePrompt' | 'tryAgain';
 
 type Table = Record<MessageKey, string>;
 
@@ -22,6 +23,8 @@ const en: Table = {
   addChild: "Recorded. Take the child's admission letter to their school. A health volunteer will visit to verify.",
   needsVisit: '{child} needs a home visit before applying. Your request is recorded and a volunteer will come.',
   invalid: 'Wrong choice.',
+  morePrompt: '0. More',
+  tryAgain: 'Sorry, that did not go through. Please dial again.',
 };
 
 const sw: Table = {
@@ -39,6 +42,8 @@ const sw: Table = {
   addChild: 'Imepokelewa. Peleka barua ya usajili shuleni. Mhudumu wa afya atatembelea kuthibitisha.',
   needsVisit: '{child} anahitaji ziara ya nyumbani kabla ya kuomba. Ombi lako limepokelewa; mhudumu atakuja.',
   invalid: 'Chaguo si sahihi.',
+  morePrompt: '0. Zaidi',
+  tryAgain: 'Samahani, haikufanikiwa. Tafadhali piga tena.',
 };
 
 export const TABLES: Record<Language, Table> = { sw, en };

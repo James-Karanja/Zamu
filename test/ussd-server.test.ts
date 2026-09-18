@@ -136,3 +136,16 @@ test('a failing database still returns a valid USSD reply', async (t) => {
   assert.ok(res.body.startsWith('END '), res.body);
   assert.ok(!/SQLITE|\.ts:\d+|at /.test(res.body), res.body);
 });
+
+test('a literal plus in the form body still identifies the caller', async (t) => {
+  const { port } = await serve(t);
+  const res = await fetch(`http://127.0.0.1:${port}/ussd`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    // A gateway that does not percent-encode the number sends it exactly like this.
+    body: 'sessionId=x&serviceCode=*384#&phoneNumber=+254700000001&text=',
+  });
+  const body = await res.text();
+  assert.ok(body.startsWith('CON '), body);
+  assert.match(body, /1\. Apply/);
+});

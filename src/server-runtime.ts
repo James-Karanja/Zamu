@@ -15,8 +15,13 @@ export interface RunOptions {
 
 export function runServer({ envVar, defaultPort, open, create, banner }: RunOptions): void {
   const configured = process.env[envVar]?.trim();
+  // Plain decimal only: `0x1f`, `1e3` and `0` are configuration mistakes, not ports.
+  if (configured !== undefined && configured !== '' && !/^\d+$/.test(configured)) {
+    console.error(`Invalid ${envVar}: ${configured}`);
+    process.exit(1);
+  }
   const port = configured ? Number(configured) : defaultPort;
-  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     console.error(`Invalid ${envVar}: ${configured}`);
     process.exit(1);
   }
@@ -27,7 +32,13 @@ export function runServer({ envVar, defaultPort, open, create, banner }: RunOpti
     process.exit(1);
   }
 
-  const db = open(path);
+  let db: DatabaseSync;
+  try {
+    db = open(path);
+  } catch (err) {
+    console.error(`Cannot open ${path}: ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  }
   const server = create(db);
 
   server.on('error', (err: NodeJS.ErrnoException) => {
@@ -39,10 +50,13 @@ export function runServer({ envVar, defaultPort, open, create, banner }: RunOpti
 
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.on(signal, () => {
+      // Gateways hold keep-alive sockets; without this, shutdown waits for them to idle out.
+      server.closeAllConnections();
       server.close(() => {
         if (db.isOpen) db.close();
         process.exit(0);
       });
+      setTimeout(() => process.exit(0), 5_000).unref();
     });
   }
 }

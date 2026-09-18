@@ -248,6 +248,7 @@ export interface VerificationRequest {
   id: number;
   phone: string;
   childId: string | null;
+  roundId: string | null;
   reason: VerificationReason;
   note: string;
   actorId: string;
@@ -256,24 +257,39 @@ export interface VerificationRequest {
 }
 
 /**
- * Records that a household needs a visit. An identical request is not repeated: the table is
- * append-only, so a parent pressing the same key twice must not create two visits to chase.
+ * Records that a household needs a visit. A request naming a child is not repeated for the
+ * same reason and round — the table is append-only, so a parent pressing the same key twice
+ * must not create two visits to chase. A request naming no child (a parent adding a child we
+ * have never seen) is always recorded, because the second child is a different ask.
  * Returns whether a new request was recorded.
  */
 export function requestVerification(
   db: DatabaseSync,
-  input: { phone: string; childId?: string | null; reason: VerificationReason; note: string; actor: Actor },
+  input: {
+    phone: string;
+    childId?: string | null;
+    roundId?: string | null;
+    reason: VerificationReason;
+    note: string;
+    actor: Actor;
+  },
   at: string = now(),
 ): boolean {
   checkTimestamp(at);
   const childId = input.childId ?? null;
-  const existing = db
-    .prepare('SELECT id FROM verification_requests WHERE phone = ? AND reason = ? AND child_id IS ?')
-    .get(input.phone, input.reason, childId);
-  if (existing) return false;
+  const roundId = input.roundId ?? null;
+  // One ask per household, reason and round: a repeated keypress must not send two volunteers,
+  // while a new round is a fresh ask.
+  if (childId || roundId) {
+    const existing = db
+      .prepare('SELECT id FROM verification_requests WHERE phone = ? AND reason = ? AND child_id IS ? AND round_id IS ?')
+      .get(input.phone, input.reason, childId, roundId);
+    if (existing) return false;
+  }
   db.prepare(
-    'INSERT INTO verification_requests (phone, child_id, reason, note, actor_id, actor_role, at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  ).run(input.phone, childId, input.reason, input.note, input.actor.id, input.actor.role, at);
+    `INSERT INTO verification_requests (phone, child_id, round_id, reason, note, actor_id, actor_role, at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(input.phone, childId, roundId, input.reason, input.note, input.actor.id, input.actor.role, at);
   return true;
 }
 
@@ -287,6 +303,7 @@ export function listVerificationRequests(db: DatabaseSync, phone?: string): Veri
     id: r.id,
     phone: r.phone,
     childId: r.child_id ?? null,
+    roundId: r.round_id ?? null,
     reason: r.reason,
     note: r.note,
     actorId: r.actor_id,

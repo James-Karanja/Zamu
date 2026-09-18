@@ -55,7 +55,7 @@ export function createServer(db: DatabaseSync): Server {
         // A gateway must always get a valid USSD reply, never a stack trace — but the
         // operator still needs to see what broke, so it goes to the log instead.
         console.error('USSD request failed:', err);
-        if (res.headersSent) res.destroy();
+        if (res.headersSent || res.destroyed || res.writableEnded) res.destroy();
         else {
           res.writeHead(200, { 'content-type': PLAIN });
           res.end('END Service unavailable. Please try again shortly.');
