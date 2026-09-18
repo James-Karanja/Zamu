@@ -3,12 +3,11 @@ import { rmSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from '../db/connection.ts';
 import {
-  awardedTotal, closeRound, correctCase, createCase, createRound, getCaseHistory, listCurrentCases, openRound,
-  recordAward, recordStage,
+  awardedTotal, closeRound, correctCase, createCase, createRound, openRound, recordAward, recordStage,
   type Actor, type EvidenceInput, type HouseType,
 } from '../store/cases.ts';
 import { addChild, addHousehold, addSchool } from '../store/registry.ts';
-import { queuePriority } from '../scoring/priority.ts';
+import { rankRound } from '../queue/ranking.ts';
 
 export const WARD = 'Mwangaza Ward';
 const COUNTY = 'Kilima County';
@@ -151,22 +150,14 @@ function seedRounds(db: DatabaseSync): void {
  * history matches what parents are shown. Returns the number of awards made.
  */
 function awardByPriority(db: DatabaseSync, roundId: string, amount: number, budget: number, closed: string): number {
-  const ranked = listCurrentCases(db, roundId)
-    .map((record) => ({
-      record,
-      appliedAt: getCaseHistory(db, record.id)[0].createdAt,
-      priority: queuePriority(db, record).priority,
-    }))
-    .sort((a, b) => b.priority - a.priority || a.appliedAt.localeCompare(b.appliedAt) || a.record.id.localeCompare(b.record.id));
-
   let spent = awardedTotal(db, roundId);
   let awards = 0;
-  for (const { record } of ranked) {
+  for (const entry of rankRound(db, roundId)) {
     if (spent + amount > budget) break;
-    if (record.currentStage !== 'verified') continue;
-    recordAward(db, record.id, amount, COMMITTEE, at(closed, awards));
-    recordStage(db, record.id, 'disbursed', CLERK, at(closed, awards + 60));
-    recordStage(db, record.id, 'school_confirmed', schoolOfCase(db, record.childId), at(closed, awards + 120));
+    if (entry.stage !== 'verified') continue;
+    recordAward(db, entry.caseId, amount, COMMITTEE, at(closed, awards));
+    recordStage(db, entry.caseId, 'disbursed', CLERK, at(closed, awards + 60));
+    recordStage(db, entry.caseId, 'school_confirmed', schoolOfCase(db, entry.childId), at(closed, awards + 120));
     spent += amount;
     awards++;
   }

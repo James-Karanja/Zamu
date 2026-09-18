@@ -10,7 +10,8 @@
   "scripts": {
     "seed": "node src/seed/run.ts",
     "test": "node --test \"test/**/*.test.ts\"",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "web": "node src/web/run.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.1",

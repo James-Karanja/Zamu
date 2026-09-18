@@ -61,7 +61,7 @@ Tier and demo reality per capability: see `poc-scope.md`.
 - No design may require national ID or bank data; the child's school record is the anchor identifier.
 - Score inputs are verifiable records or witnessed evidence; no officer-discretion input exists.
 - Adoption must not rely on local officials' goodwill (see `pitch-positioning.md`).
-- Public queue shows only position, need score, waiting bonus, award amount, school, masked name (initial + partial surname), and case ID. A parent sees their own full breakdown via USSD only. Evidence photos, GPS, and phone numbers are reviewer-only.
+- Public queue shows only position, need score, waiting bonus, priority, current stage, award amount, school, masked name (initial + fixed-width mask), and case ID. A parent sees their own full breakdown via USSD only. Evidence photos, GPS, and phone numbers are reviewer-only.
 - Parental consent is captured before any application (Kenya Data Protection Act 2019); case records are retained a minimum of 7 years as an audit trail, then deleted.
 - Parent-facing text in Swahili and English; language, currency, and funding cycle are configuration, the integrity core (CAP-3, CAP-5) is not.
 - Public repository: synthetic data only, no real personal data.

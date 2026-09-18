@@ -16,6 +16,14 @@ export function databasePath(): string {
   return configured === ':memory:' || isAbsolute(configured) ? configured : resolve(PROJECT_ROOT, configured);
 }
 
+/**
+ * Opens the database without writing to it: no schema DDL, no journal-mode change.
+ * Used by the public queue server, which must never modify what it publishes.
+ */
+export function openReadOnly(path: string = databasePath()): DatabaseSync {
+  return new DatabaseSync(path, { readOnly: true, timeout: 5_000 });
+}
+
 /** Opens the Zamu database and applies the schema. */
 export function openDatabase(path: string = databasePath()): DatabaseSync {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
