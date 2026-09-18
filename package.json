@@ -1,0 +1,19 @@
+{
+  "name": "zamu",
+  "version": "0.1.0",
+  "description": "Zamu — public money made visible, so bursaries are a right, not a favour.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "seed": "node src/seed/run.ts",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.1",
+    "typescript": "^7.0.2"
+  }
+}

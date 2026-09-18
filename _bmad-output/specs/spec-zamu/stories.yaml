@@ -1,0 +1,61 @@
+- id: "1"
+  title: Immutable case store and synthetic seed data
+  description: >-
+    Persist rounds, cases, and evidence so no stored case is ever mutated; a correction creates a new case linked to the original (SPEC CAP-5).
+    Seed realistic synthetic households, children, schools, and evidence covering every scoring band.
+  spec_checkpoint: true
+  invoke_dev_with: >-
+    Stack: Node/TypeScript + SQLite. Enforce immutability at the data layer (append-only tables, no UPDATE/DELETE on cases or evidence), not only in application code.
+    Synthetic data only — the repo is public. Retention (7 years) is documented, not implemented.
+- id: "2"
+  title: Scoring engine
+  description: >-
+    Compute need score, reason text, waiting bonus, and queue priority exactly as defined in scoring-model.md (SPEC CAP-3).
+    No code path may set a score manually.
+  spec_checkpoint: true
+  invoke_dev_with: >-
+    Pure, deterministic functions with unit tests covering every band, the top-two reason text, bonus reset on award, and tie-breaking by application time.
+- id: "3"
+  title: Queue and public queue page
+  description: >-
+    Order a round's applicants by priority and serve a read-only, mobile-friendly public page per round (SPEC CAP-4).
+    The page shows only the public fields listed in SPEC Constraints, with masked names.
+- id: "4"
+  title: USSD flow
+  description: >-
+    Consent screen, apply for an on-file child in at most 3 steps, flag unknown children for verification, and look up queue position and own score breakdown (SPEC CAP-2, CAP-4).
+    Menus in Swahili and English.
+  invoke_dev_with: >-
+    Africa's Talking USSD callback format (CON/END responses); must run against the Africa's Talking sandbox simulator. Keep each screen within USSD length limits.
+- id: "5"
+  title: SMS notifications
+  description: >-
+    Send Swahili or English SMS when a round opens, when it is a child's turn with the amount available, and on every stage change (SPEC CAP-1).
+  done_checkpoint: true
+  invoke_dev_with: >-
+    Africa's Talking SMS sandbox. Trigger from case stage transitions, not from UI handlers.
+- id: "6"
+  title: Admin dashboard and role-based stage flow
+  description: >-
+    Dashboard to open a round, review cases, advance stages, and view queue and totals, with each stage advanceable only by its owning role (SPEC CAP-11, CAP-10).
+    Rejected actions are logged.
+- id: "7"
+  title: Simulated CHV capture and school confirmation
+  description: >-
+    Simulate CHV/teacher geotagged evidence capture feeding scoring, and school fee confirmation that marks a case disbursed-confirmed and triggers SMS (SPEC CAP-6, CAP-7).
+    Amount mismatches are visible.
+- id: "8"
+  title: Round-totals SMS
+  description: >-
+    On round close, send every applicant one SMS with total amount distributed and number of recipients, equal to the sum of confirmed awards (SPEC CAP-8).
+- id: "9"
+  title: Anonymous USSD report
+  description: >-
+    USSD option to report a skipped turn, amount mismatch, or ineligible beneficiary, opening a review case with no reporter phone number stored (SPEC CAP-9).
+  done_checkpoint: true
+- id: "10"
+  title: End-to-end demo scenario and README
+  description: >-
+    Scripted, resettable demo that walks the SPEC success signal end to end, plus a README covering problem, setup, sandbox usage, and architecture.
+  invoke_dev_with: >-
+    README must also note how AI coding tools (BMAD skills + Claude Code) were used — required by the written summary.

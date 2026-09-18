@@ -1,0 +1,124 @@
+-- Zamu schema. Cases, evidence, rounds, and every state change are append-only:
+-- triggers below reject UPDATE and DELETE, and `PRAGMA recursive_triggers = ON`
+-- (see connection.ts) makes INSERT OR REPLACE fire them too.
+--
+-- Scope of the guarantee: this stops the application - and anything else opening the file
+-- the same way - from rewriting history. It is not tamper-proofing against someone with
+-- write access to the file, who can DROP TRIGGER or use PRAGMA writable_schema.
+-- Detecting that needs a hash chain over events (out of scope for this story).
+
+CREATE TABLE IF NOT EXISTS schools (
+  id     TEXT PRIMARY KEY,
+  name   TEXT NOT NULL CHECK (length(trim(name)) > 0),
+  county TEXT NOT NULL CHECK (length(trim(county)) > 0),
+  ward   TEXT NOT NULL CHECK (length(trim(ward)) > 0)
+);
+
+CREATE TABLE IF NOT EXISTS households (
+  id            TEXT PRIMARY KEY,
+  guardian_name TEXT NOT NULL CHECK (length(trim(guardian_name)) > 0),
+  phone         TEXT NOT NULL CHECK (length(trim(phone)) > 0),
+  language      TEXT NOT NULL CHECK (language IN ('sw', 'en'))
+);
+
+CREATE TABLE IF NOT EXISTS children (
+  id           TEXT PRIMARY KEY,
+  household_id TEXT NOT NULL REFERENCES households(id),
+  school_id    TEXT NOT NULL REFERENCES schools(id),
+  name         TEXT NOT NULL CHECK (length(trim(name)) > 0),
+  admission_no TEXT NOT NULL CHECK (length(trim(admission_no)) > 0),
+  UNIQUE (school_id, admission_no)
+);
+
+CREATE TABLE IF NOT EXISTS rounds (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL CHECK (length(trim(name)) > 0),
+  ward       TEXT NOT NULL CHECK (length(trim(ward)) > 0),
+  currency   TEXT NOT NULL CHECK (length(trim(currency)) > 0),
+  budget     INTEGER NOT NULL CHECK (typeof(budget) = 'integer' AND budget >= 0),
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS round_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  round_id   TEXT NOT NULL REFERENCES rounds(id),
+  type       TEXT NOT NULL CHECK (type IN ('opened', 'closed')),
+  actor_id   TEXT NOT NULL CHECK (length(trim(actor_id)) > 0),
+  actor_role TEXT NOT NULL CHECK (actor_role IN ('parent', 'chv', 'teacher', 'clerk', 'committee', 'school', 'system')),
+  at         TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cases (
+  id                 TEXT PRIMARY KEY,
+  round_id           TEXT NOT NULL REFERENCES rounds(id),
+  child_id           TEXT NOT NULL REFERENCES children(id),
+  supersedes_case_id TEXT REFERENCES cases(id),
+  correction_reason  TEXT CHECK (correction_reason IS NULL OR length(trim(correction_reason)) > 0),
+  actor_id           TEXT NOT NULL CHECK (length(trim(actor_id)) > 0),
+  actor_role         TEXT NOT NULL CHECK (actor_role IN ('parent', 'chv', 'teacher', 'clerk', 'committee', 'school', 'system')),
+  created_at         TEXT NOT NULL,
+  CHECK ((supersedes_case_id IS NULL) = (correction_reason IS NULL)),
+  CHECK (supersedes_case_id IS NULL OR supersedes_case_id <> id)
+);
+
+-- A case can be superseded at most once.
+CREATE UNIQUE INDEX IF NOT EXISTS cases_supersedes_once
+  ON cases(supersedes_case_id) WHERE supersedes_case_id IS NOT NULL;
+
+-- One original application per child per round; corrections are the only way to add another.
+CREATE UNIQUE INDEX IF NOT EXISTS cases_one_application_per_round
+  ON cases(round_id, child_id) WHERE supersedes_case_id IS NULL;
+
+CREATE TABLE IF NOT EXISTS evidence (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  case_id              TEXT NOT NULL UNIQUE REFERENCES cases(id),
+  fee_balance          INTEGER NOT NULL CHECK (typeof(fee_balance) = 'integer' AND fee_balance >= 0),
+  house_type           TEXT NOT NULL CHECK (house_type IN ('permanent', 'semi_permanent', 'mud')),
+  cattle               INTEGER NOT NULL CHECK (typeof(cattle) = 'integer' AND cattle >= 0),
+  has_goats_or_poultry INTEGER NOT NULL CHECK (has_goats_or_poultry IN (0, 1)),
+  land_acres           REAL NOT NULL CHECK (land_acres >= 0 AND land_acres < 10000),
+  has_title            INTEGER NOT NULL CHECK (has_title IN (0, 1)),
+  photo_ref            TEXT NOT NULL CHECK (length(trim(photo_ref)) > 0),
+  lat                  REAL NOT NULL CHECK (lat BETWEEN -90 AND 90),
+  lng                  REAL NOT NULL CHECK (lng BETWEEN -180 AND 180),
+  captured_by          TEXT NOT NULL CHECK (length(trim(captured_by)) > 0),
+  captured_by_role     TEXT NOT NULL CHECK (captured_by_role IN ('chv', 'teacher')),
+  captured_at          TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS case_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  case_id    TEXT NOT NULL REFERENCES cases(id),
+  stage      TEXT NOT NULL CHECK (stage IN ('applied', 'verified', 'approved', 'disbursed', 'school_confirmed', 'rejected')),
+  amount     INTEGER CHECK (amount IS NULL OR (typeof(amount) = 'integer' AND amount > 0)),
+  note       TEXT,
+  actor_id   TEXT NOT NULL CHECK (length(trim(actor_id)) > 0),
+  actor_role TEXT NOT NULL CHECK (actor_role IN ('parent', 'chv', 'teacher', 'clerk', 'committee', 'school', 'system')),
+  at         TEXT NOT NULL,
+  CHECK ((stage = 'approved') = (amount IS NOT NULL))
+);
+
+CREATE TRIGGER IF NOT EXISTS cases_no_update BEFORE UPDATE ON cases
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+CREATE TRIGGER IF NOT EXISTS cases_no_delete BEFORE DELETE ON cases
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+
+CREATE TRIGGER IF NOT EXISTS evidence_no_update BEFORE UPDATE ON evidence
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+CREATE TRIGGER IF NOT EXISTS evidence_no_delete BEFORE DELETE ON evidence
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+
+CREATE TRIGGER IF NOT EXISTS rounds_no_update BEFORE UPDATE ON rounds
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+CREATE TRIGGER IF NOT EXISTS rounds_no_delete BEFORE DELETE ON rounds
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+
+CREATE TRIGGER IF NOT EXISTS round_events_no_update BEFORE UPDATE ON round_events
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+CREATE TRIGGER IF NOT EXISTS round_events_no_delete BEFORE DELETE ON round_events
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+
+CREATE TRIGGER IF NOT EXISTS case_events_no_update BEFORE UPDATE ON case_events
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+CREATE TRIGGER IF NOT EXISTS case_events_no_delete BEFORE DELETE ON case_events
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
