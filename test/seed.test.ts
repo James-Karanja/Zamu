@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { openDatabase } from '../src/db/connection.ts';
 import { awardedTotal, getCaseHistory, listCurrentCases } from '../src/store/cases.ts';
+import { MAX_POINTS, scoreNeed } from '../src/scoring/model.ts';
+import { queuePriority } from '../src/scoring/priority.ts';
 import { CHILD_COUNT, CORRECTED_CHILD, FAKE_PHONE_PATTERN, seedDatabase } from '../src/seed/data.ts';
 import { tempDir } from './helpers.ts';
 
@@ -34,20 +36,70 @@ test('open round holds one current case per applicant', (t) => {
   assert.equal(new Set(cases.map((c) => c.childId)).size, CHILD_COUNT);
 });
 
-test('open round covers every scoring-model band', (t) => {
+test('open round covers every band of the scoring module', (t) => {
+  const { db } = seeded(t);
+  const scores = listCurrentCases(db, OPEN_ROUND).map((c) => scoreNeed(c.evidence));
+  const pointsFor = (input: string) => new Set(scores.map((s) => s.components.find((c) => c.input === input)!.points));
+
+  assert.deepEqual(pointsFor('fee_balance'), new Set([0, 12, 24, 35]));
+  assert.deepEqual(pointsFor('house_type'), new Set([0, 15, 30]));
+  assert.deepEqual(pointsFor('livestock'), new Set([0, 8, 14, 20]));
+  assert.deepEqual(pointsFor('land'), new Set([0, 7, 15]));
+  assert.ok(scores.every((s) => s.total >= 0 && s.total <= MAX_POINTS.fee_balance + MAX_POINTS.house_type + MAX_POINTS.livestock + MAX_POINTS.land));
+});
+
+const EXPECTED_AWARDS = {
+  'R-2025-T3': {
+    amount: 15_000,
+    children: ['CH-003', 'CH-004', 'CH-006', 'CH-008', 'CH-012', 'CH-015', 'CH-020', 'CH-024', 'CH-027', 'CH-030'],
+  },
+  'R-2026-T1': {
+    amount: 12_500,
+    children: ['CH-003', 'CH-006', 'CH-011', 'CH-014', 'CH-015', 'CH-018', 'CH-019', 'CH-021', 'CH-023', 'CH-027', 'CH-030', 'CH-035'],
+  },
+};
+
+test('closed-round awards went to the highest-priority applicants', (t) => {
+  const { db } = seeded(t);
+  for (const roundId of Object.keys(EXPECTED_AWARDS)) {
+    const ranked = listCurrentCases(db, roundId).map((record) => ({
+      childId: record.childId,
+      awarded: record.events.some((e) => e.stage === 'approved'),
+      priority: queuePriority(db, record).priority,
+    }));
+    const awarded = ranked.filter((r) => r.awarded);
+    const unawarded = ranked.filter((r) => !r.awarded);
+    assert.ok(awarded.length > 0, `${roundId} awarded nobody`);
+    assert.ok(unawarded.length > 0, `${roundId} awarded everybody, so ranking proves nothing`);
+    const lowestAwarded = Math.min(...awarded.map((r) => r.priority));
+    const highestUnawarded = Math.max(...unawarded.map((r) => r.priority));
+    assert.ok(lowestAwarded >= highestUnawarded, `${roundId}: an unawarded applicant outranked an awarded one`);
+  }
+});
+
+test('closed rounds award exactly the recipients the budget covers, ties to the earlier application', (t) => {
+  const { db } = seeded(t);
+  for (const [roundId, expected] of Object.entries(EXPECTED_AWARDS)) {
+    const awarded = listCurrentCases(db, roundId)
+      .filter((record) => record.events.some((e) => e.stage === 'approved'))
+      .map((record) => record.childId)
+      .sort();
+    assert.deepEqual(awarded, expected.children, `${roundId} recipients`);
+
+    const budget = (db.prepare('SELECT budget FROM rounds WHERE id = ?').get(roundId) as { budget: number }).budget;
+    assert.equal(awardedTotal(db, roundId), Math.floor(budget / expected.amount) * expected.amount);
+    assert.ok(awardedTotal(db, roundId) + expected.amount > budget, `${roundId} left room for another award`);
+  }
+});
+
+test('the seed demonstrates that hiding a title deed does not raise a score', (t) => {
   const { db } = seeded(t);
   const evidence = listCurrentCases(db, OPEN_ROUND).map((c) => c.evidence);
-
-  const feeBand = (b: number) => (b === 0 ? 0 : b < 10_000 ? 1 : b <= 25_000 ? 2 : 3);
-  const livestockBand = (e: (typeof evidence)[number]) =>
-    e.cattle >= 5 ? 0 : e.cattle >= 1 ? 1 : e.hasGoatsOrPoultry ? 2 : 3;
-  const landBand = (e: (typeof evidence)[number]) =>
-    e.landAcres > 2 && e.hasTitle ? 0 : e.landAcres >= 0.5 ? 1 : 2;
-
-  assert.deepEqual(new Set(evidence.map((e) => feeBand(e.feeBalance))), new Set([0, 1, 2, 3]));
-  assert.deepEqual(new Set(evidence.map((e) => e.houseType)), new Set(['permanent', 'semi_permanent', 'mud']));
-  assert.deepEqual(new Set(evidence.map(livestockBand)), new Set([0, 1, 2, 3]));
-  assert.deepEqual(new Set(evidence.map(landBand)), new Set([0, 1, 2]));
+  const untitledLarge = evidence.filter((e) => e.landAcres > 2 && !e.hasTitle);
+  const titledLarge = evidence.filter((e) => e.landAcres > 2 && e.hasTitle);
+  assert.ok(untitledLarge.length > 0 && titledLarge.length > 0);
+  const landPoints = (e: (typeof evidence)[number]) => scoreNeed(e).components.find((c) => c.input === 'land')!.points;
+  assert.deepEqual(new Set([...untitledLarge, ...titledLarge].map(landPoints)), new Set([0]));
 });
 
 test('some open-round applicants waited through earlier rounds without an award', (t) => {

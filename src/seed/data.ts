@@ -3,10 +3,12 @@ import { rmSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from '../db/connection.ts';
 import {
-  closeRound, correctCase, createCase, createRound, openRound, recordAward, recordStage,
+  awardedTotal, closeRound, correctCase, createCase, createRound, getCaseHistory, listCurrentCases, openRound,
+  recordAward, recordStage,
   type Actor, type EvidenceInput, type HouseType,
 } from '../store/cases.ts';
 import { addChild, addHousehold, addSchool } from '../store/registry.ts';
+import { queuePriority } from '../scoring/priority.ts';
 
 export const WARD = 'Mwangaza Ward';
 const COUNTY = 'Kilima County';
@@ -33,11 +35,13 @@ const LIVESTOCK = [
   { cattle: 0, hasGoatsOrPoultry: true },
   { cattle: 0, hasGoatsOrPoultry: false },
 ];
-// Land bands: >2 acres with title, 0.5–2 acres, <0.5 acre or none.
+// Land bands: >2 acres (title or not), 0.5–2 acres, <0.5 acre or none.
+// The untitled 3-acre entry exists so the demo shows that hiding a title deed does not raise a score.
 const LAND = [
   { landAcres: 2.5, hasTitle: true },
   { landAcres: 1.2, hasTitle: true },
   { landAcres: 0.3, hasTitle: false },
+  { landAcres: 3.0, hasTitle: false },
 ];
 // Fee balance bands: 0, <10,000, 10,000–25,000, >25,000.
 const FEE_BALANCES = [0, 6_500, 18_000, 32_000];
@@ -66,7 +70,6 @@ const capturerOf = (child: number): Actor => {
   const e = evidenceFor(child, 0, '2026-01-01');
   return { id: e.capturedBy, role: e.capturedByRole };
 };
-const schoolOf = (child: number): Actor => ({ id: SCHOOLS[child % 3].id, role: 'school' });
 
 const hhId = (h: number) => `HH-${String(h + 1).padStart(3, '0')}`;
 const childId = (c: number) => `CH-${String(c + 1).padStart(3, '0')}`;
@@ -80,7 +83,7 @@ function evidenceFor(child: number, round: number, date: string): EvidenceInput 
     feeBalance: FEE_BALANCES[(child + round) % 4] + (FEE_BALANCES[(child + round) % 4] === 0 ? 0 : child * 50),
     houseType: houseTypeOf(h),
     ...LIVESTOCK[h % 4],
-    ...LAND[Math.floor(h / 2) % 3],
+    ...LAND[Math.floor(h / 2) % LAND.length],
     photoRef: `evidence/${hhId(h)}-${ROUNDS[round].id}.jpg`,
     lat: -0.35 - h * 0.002,
     lng: 36.9 + h * 0.003,
@@ -112,19 +115,17 @@ function seedRegistry(db: DatabaseSync): void {
   }
 }
 
-// Closed rounds award the neediest households: mud houses in round 1, then semi-permanent houses in round 2.
-const AWARDS = [
-  { houseType: 'mud' as HouseType, amount: 15_000 },
-  { houseType: 'semi_permanent' as HouseType, amount: 12_500 },
-];
+// Award size per closed round; recipients are the highest-priority applicants the budget covers.
+const AWARD_AMOUNTS = [15_000, 12_500];
 
 function seedRounds(db: DatabaseSync): void {
-  ROUNDS.forEach((round, r) => {
+  let closedRoundsSoFar = 0;
+  ROUNDS.forEach((round) => {
     createRound(db, { id: round.id, name: round.name, ward: WARD, currency: 'KES', budget: round.budget }, at(round.opened, 0));
     openRound(db, round.id, CLERK, at(round.opened, 0));
 
     for (let c = 0; c < round.applicants; c++) {
-      let evidence = evidenceFor(c, r, round.opened);
+      let evidence = evidenceFor(c, ROUNDS.indexOf(round), round.opened);
       if (round.closed === null && childId(c) === CORRECTED_CHILD) evidence = { ...evidence, cattle: 0, hasGoatsOrPoultry: false };
       const caseId = createCase(db, { roundId: round.id, childId: childId(c), evidence, actor: parentOf(c) }, at(round.opened, c + 1));
       if (round.closed === null) {
@@ -132,15 +133,50 @@ function seedRounds(db: DatabaseSync): void {
         continue;
       }
       recordStage(db, caseId, 'verified', capturerOf(c), at(round.opened, c + 90));
-      const award = AWARDS[r];
-      if (houseTypeOf(householdOf(c)) === award.houseType) {
-        recordAward(db, caseId, award.amount, COMMITTEE, at(round.closed, c));
-        recordStage(db, caseId, 'disbursed', CLERK, at(round.closed, c + 60));
-        recordStage(db, caseId, 'school_confirmed', schoolOf(c), at(round.closed, c + 120));
-      }
     }
-    if (round.closed !== null) closeRound(db, round.id, CLERK, at(round.closed, 240));
+    if (round.closed !== null) {
+      const amount = AWARD_AMOUNTS[closedRoundsSoFar++];
+      if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error(`no award amount for closed round ${round.id}`);
+      if (amount > round.budget) throw new Error(`round ${round.id}: budget ${round.budget} cannot cover one award of ${amount}`);
+      const awards = awardByPriority(db, round.id, amount, round.budget, round.closed);
+      closeRound(db, round.id, CLERK, at(round.closed, Math.max(240, awards + 121)));
+    }
   });
+}
+
+/**
+ * Awards the highest-priority applicants the budget can cover, ties going to the earlier
+ * application — measured from the first case in a correction chain, so correcting evidence
+ * never costs a household its place. This is the rule the public queue publishes, so demo
+ * history matches what parents are shown. Returns the number of awards made.
+ */
+function awardByPriority(db: DatabaseSync, roundId: string, amount: number, budget: number, closed: string): number {
+  const ranked = listCurrentCases(db, roundId)
+    .map((record) => ({
+      record,
+      appliedAt: getCaseHistory(db, record.id)[0].createdAt,
+      priority: queuePriority(db, record).priority,
+    }))
+    .sort((a, b) => b.priority - a.priority || a.appliedAt.localeCompare(b.appliedAt) || a.record.id.localeCompare(b.record.id));
+
+  let spent = awardedTotal(db, roundId);
+  let awards = 0;
+  for (const { record } of ranked) {
+    if (spent + amount > budget) break;
+    if (record.currentStage !== 'verified') continue;
+    recordAward(db, record.id, amount, COMMITTEE, at(closed, awards));
+    recordStage(db, record.id, 'disbursed', CLERK, at(closed, awards + 60));
+    recordStage(db, record.id, 'school_confirmed', schoolOfCase(db, record.childId), at(closed, awards + 120));
+    spent += amount;
+    awards++;
+  }
+  return awards;
+}
+
+/** The school a child is actually registered at, rather than one re-derived from the id. */
+function schoolOfCase(db: DatabaseSync, childId: string): Actor {
+  const row = db.prepare('SELECT school_id FROM children WHERE id = ?').get(childId) as { school_id: string };
+  return { id: row.school_id, role: 'school' };
 }
 
 function seedCorrection(db: DatabaseSync): void {
