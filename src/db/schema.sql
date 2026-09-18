@@ -130,6 +130,46 @@ BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
 CREATE TRIGGER IF NOT EXISTS verification_requests_no_delete BEFORE DELETE ON verification_requests
 BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
 
+-- Messages are records derived from the event log, not side effects of a handler.
+-- A message never changes; what happened when we tried to send it is a separate append-only row.
+CREATE TABLE IF NOT EXISTS messages (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- The event this message was derived from, e.g. 'case_event:42' or 'round_event:7'.
+  event_ref  TEXT NOT NULL CHECK (length(trim(event_ref)) > 0),
+  phone      TEXT NOT NULL CHECK (length(trim(phone)) > 0),
+  language   TEXT NOT NULL CHECK (language IN ('sw', 'en')),
+  template   TEXT NOT NULL CHECK (length(trim(template)) > 0),
+  body       TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 160),
+  case_id    TEXT REFERENCES cases(id),
+  round_id   TEXT REFERENCES rounds(id),
+  at         TEXT NOT NULL
+);
+
+-- One message per event per recipient: this is what makes dispatch idempotent.
+CREATE UNIQUE INDEX IF NOT EXISTS messages_once_per_event ON messages(event_ref, phone);
+
+CREATE TABLE IF NOT EXISTS message_attempts (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id  INTEGER NOT NULL REFERENCES messages(id),
+  outcome     TEXT NOT NULL CHECK (outcome IN ('sent', 'failed')),
+  provider_ref TEXT,
+  error       TEXT,
+  at          TEXT NOT NULL,
+  CHECK ((outcome = 'failed') = (error IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS message_attempts_by_message ON message_attempts(message_id);
+
+CREATE TRIGGER IF NOT EXISTS messages_no_update BEFORE UPDATE ON messages
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+CREATE TRIGGER IF NOT EXISTS messages_no_delete BEFORE DELETE ON messages
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+
+CREATE TRIGGER IF NOT EXISTS message_attempts_no_update BEFORE UPDATE ON message_attempts
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+CREATE TRIGGER IF NOT EXISTS message_attempts_no_delete BEFORE DELETE ON message_attempts
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+
 CREATE TRIGGER IF NOT EXISTS cases_no_update BEFORE UPDATE ON cases
 BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
 CREATE TRIGGER IF NOT EXISTS cases_no_delete BEFORE DELETE ON cases
