@@ -161,8 +161,17 @@ function transaction<T>(db: DatabaseSync, fn: () => T): T {
   }
 }
 
+/** Guard messages raised by the BEFORE INSERT triggers, keyed by the unique column they protect. */
+const GUARD_MESSAGES: Record<string, string> = {
+  'cases.child_id': 'duplicate application',
+  'cases.supersedes_case_id': 'already superseded',
+};
+
 function isUniqueViolation(err: unknown, column: string): boolean {
-  return err instanceof Error && err.message.includes('UNIQUE constraint failed') && err.message.includes(column);
+  if (!(err instanceof Error)) return false;
+  const guard = GUARD_MESSAGES[column];
+  return (err.message.includes('UNIQUE constraint failed') && err.message.includes(column)) ||
+    (guard !== undefined && err.message.includes(guard));
 }
 
 // Rounds

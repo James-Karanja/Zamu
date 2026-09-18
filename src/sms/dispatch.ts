@@ -3,10 +3,12 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { type Language, type MessageKey, t } from '../i18n/strings.ts';
 import { rankRound } from '../queue/ranking.ts';
+import { roundsWaited } from '../scoring/priority.ts';
 
 /** The USSD code a parent dials, and where the queue is published. Shown in every message. */
 export const USSD_CODE = process.env.ZAMU_USSD_CODE ?? '*384*1234#';
-export const QUEUE_SITE = process.env.ZAMU_SITE ?? 'zamu.go.ke';
+// `.example` is reserved (RFC 2606): it implies no government body and cannot belong to anyone.
+export const QUEUE_SITE = process.env.ZAMU_SITE ?? 'zamu.example';
 
 /** One SMS: 160 GSM-7 characters. Longer bodies are a bug, not something to truncate. */
 export const MAX_SMS = 160;
@@ -156,21 +158,13 @@ function householdsWithChildren(db: DatabaseSync): (Recipient & { id: string })[
     .all() as unknown as (Recipient & { id: string })[];
 }
 
-/** Rounds a household applied in before `roundId` without an award — the "your turn" signal. */
+/**
+ * The longest wait among a household's children, by exactly the rule the queue uses for its
+ * waiting bonus. One rule, so a "your turn" SMS can never contradict the queue a parent then sees.
+ */
 function roundsWaitedByHousehold(db: DatabaseSync, householdId: string, roundId: string): number {
-  const row = db
-    .prepare(
-      `SELECT COUNT(DISTINCT c.round_id) AS n FROM cases c
-       JOIN children ch ON ch.id = c.child_id
-       JOIN rounds r ON r.id = c.round_id
-       WHERE ch.household_id = ?
-         AND julianday(r.created_at) < julianday((SELECT created_at FROM rounds WHERE id = ?))
-         AND EXISTS (SELECT 1 FROM round_events re WHERE re.round_id = r.id AND re.type = 'closed')
-         AND NOT EXISTS (SELECT 1 FROM case_events e WHERE e.case_id = c.id AND e.stage = 'approved')
-         AND NOT EXISTS (SELECT 1 FROM cases s WHERE s.supersedes_case_id = c.id)`,
-    )
-    .get(householdId, roundId) as { n: number };
-  return row.n;
+  const children = db.prepare('SELECT id FROM children WHERE household_id = ?').all(householdId) as unknown as { id: string }[];
+  return children.reduce((longest, child) => Math.max(longest, roundsWaited(db, child.id, roundId)), 0);
 }
 
 function queueRoundOpenings(db: DatabaseSync): number {

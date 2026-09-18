@@ -141,7 +141,7 @@ test('a rejected case is told, and keeps its place for the next round', async (t
   assert.ok(message);
   // The test household's language is Swahili, so assert the message in either language.
   assert.match(message.body, /not selected|hakuchaguliwa/i);
-  assert.match(message.body, /next round|raundi ijayo/i);
+  assert.match(message.body, /apply again|kuomba tena/i);
 });
 
 test('dispatching twice queues nothing and sends nothing the second time', async (t) => {

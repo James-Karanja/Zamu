@@ -70,7 +70,7 @@ context:
 
 **Execution:**
 - [x] `src/db/schema.sql` -- `messages` (event ref, phone, language, template, body, at) and `message_attempts` (message, outcome, provider ref, error, at), append-only triggers, unique index on the source event -- messages are records, not side effects
-- [x] `src/sms/messages.ts` -- SMS templates in both languages plus `renderMessage`, enforcing the 160-character GSM-7 limit -- one SMS per event
+- [x] `src/i18n/strings.ts`, `src/sms/dispatch.ts` -- SMS templates in both languages plus `renderBody`, enforcing the 160-septet GSM-7 limit -- one SMS per event
 - [x] `src/sms/dispatch.ts` -- `queuePending(db)` deriving messages from unmessaged events, `sendQueued(db, sender)` recording an attempt per message, and `dispatch(db, sender)` running both -- idempotent by construction
 - [x] `src/sms/senders.ts` -- `recordingSender` (default) and `africasTalkingSender(config, fetch)` posting the sandbox's form body, injectable so tests never touch the network -- opt-in sending
 - [x] `src/sms/run.ts`, `package.json` -- `npm run sms` dispatches with the recording sender and prints the outbox; `--live` requires credentials -- one command for the demo
@@ -97,6 +97,8 @@ context:
 
 ## Spec Change Log
 
+- **Post-commit correction.** Triage row 16 was recorded as fixed in `89ecbb5`, but the edit never matched the ticked task line, so the task list still named a nonexistent `src/sms/messages.ts`. Caught while resuming after a rate limit; corrected here.
+
 - **Review round 1 (patch tier).** Two live defects fixed: closed rounds were announced as open, and superseded cases rendered "place 0". GSM-7 went from asserted to enforced (real alphabet, septet counting, typed errors). The `--live` gate moved out of the untested entry point into `chooseSender`. Deferred and recorded rather than built: duplicate-send protection across a crash (needs a provider idempotency key) and STOP/opt-out handling (needs inbound SMS and a suppression column). KEEP: messages derived from the event log, append-only messages and attempts, the recording sender as the default everywhere.
 
 ## Review Triage Log
@@ -118,7 +120,7 @@ context:
 | 13 | blind, edge | `run.ts` left the database open on failure and printed unrelated messages | medium | patch | `try/finally`, exit code, and only this run's messages |
 | 14 | verif-gap | The language test passed even when every message was rendered in English | high | patch | Bodies are now asserted per language |
 | 15 | verif-gap | Stage-message content was never compared to its own case | high | patch | Place, child and school are checked against the ranking |
-| 16 | blind, edge, verif-gap | Task list claimed `src/sms/messages.ts` and `renderMessage`, which do not exist | medium | patch | Task text corrected to `src/i18n/strings.ts` and `renderBody` |
+| 16 | blind, edge, verif-gap | Task list claimed `src/sms/messages.ts` and `renderMessage`, which do not exist | medium | patch | Task text corrected to `src/i18n/strings.ts` and `renderBody`. *(The first attempt at this correction did not apply — the line had already become `- [x]` — and was fixed after the commit; see Spec Change Log.)* |
 | 17 | blind | Two tests could not fail (credential scan, either-language rejection) | medium | patch | Replaced with assertions that can |
 | 18 | edge, verif-gap | Test teardown removed the temp directory before closing the database | low | patch | Order fixed |
 | 19 | blind | Retry duplicates a real SMS if the process dies between provider call and write | medium | defer | Needs a provider idempotency key or an in-flight row; recorded as a known limitation |

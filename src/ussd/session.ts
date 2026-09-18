@@ -156,7 +156,11 @@ function pick<T>(items: T[], choice: string | undefined): T | undefined {
   return items[Number(choice) - 1];
 }
 
-/** Renders the screen for the keypresses so far. Writes only when the parent consents. */
+/**
+ * Renders the screen for the keypresses so far. An application is written only after the parent
+ * consents; a home-visit request is written when a parent asks to apply for a child with no
+ * evidence on file, or asks to add a child.
+ */
 export function respond(db: DatabaseSync, request: UssdRequest): UssdReply {
   const phone = normalisePhone(request.phoneNumber);
   const now = request.now ?? Date.now();

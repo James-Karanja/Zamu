@@ -115,6 +115,8 @@ Greenfield — project root holds only BMAD tooling (`.claude/`, `.agents/`, `_b
 
 ## Spec Change Log
 
+- **Correction found in story 10's review.** Round-1 finding #1 (the `INSERT OR REPLACE` bypass) was fixed with `PRAGMA recursive_triggers = ON`, which applies only to connections Zamu opens. A plain connection could still rewrite evidence. Story 10 replaced it with `BEFORE INSERT` guards in the schema, which hold on every connection, and added a test that attacks through a plain connection.
+
 - **Review round 1 (intent_gap).** Findings 2–7 and 18: `correctCase` allowed double awards, stages could be recorded in any order, awards ignored the round budget, rounds could reopen, events named no actor, callers could backdate, and reads hid superseded status. Human answered Q1a/Q2a/Q3a: lifecycle enforced in the store, corrections only before award in an open round, actors recorded. Amended Boundaries, I/O matrix, Tasks and Acceptance accordingly, and folded in the patch-tier findings (REPLACE bypass, value CHECKs, rounds immutability, path/seed fixes, verification-gap tests). Avoids a store that later stories can drive into impossible states. KEEP: the append-only schema shape, event-sourced stages, `ZM-0001` case ids, partial unique indexes for duplicate/supersede rules, deterministic seed with the hidden-cattle correction, and the existing 25 passing tests.
 
 ## Review Triage Log

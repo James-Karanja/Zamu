@@ -13,10 +13,12 @@
     "typecheck": "tsc",
     "web": "node src/web/run.ts",
     "ussd": "node src/ussd/run.ts",
-    "sms": "node src/sms/run.ts"
+    "sms": "node src/sms/run.ts",
+    "demo": "node src/demo/run.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.1",
     "typescript": "^7.0.2"
-  }
+  },
+  "license": "MIT"
 }

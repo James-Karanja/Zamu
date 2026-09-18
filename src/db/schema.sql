@@ -2,10 +2,9 @@
 -- triggers below reject UPDATE and DELETE, and `PRAGMA recursive_triggers = ON`
 -- (see connection.ts) makes INSERT OR REPLACE fire them too.
 --
--- Scope of the guarantee: this stops the application - and anything else opening the file
--- the same way - from rewriting history. It is not tamper-proofing against someone with
--- write access to the file, who can DROP TRIGGER or use PRAGMA writable_schema.
--- Detecting that needs a hash chain over events (out of scope for this story).
+-- Scope of the guarantee: UPDATE, DELETE and INSERT OR REPLACE are refused on every connection,
+-- including a plain sqlite3 session. It is not tamper-proofing against someone who can change the
+-- schema itself (DROP TRIGGER, PRAGMA writable_schema). Detecting that needs a hash chain over events.
 
 CREATE TABLE IF NOT EXISTS schools (
   id     TEXT PRIMARY KEY,
@@ -168,6 +167,55 @@ BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
 CREATE TRIGGER IF NOT EXISTS message_attempts_no_update BEFORE UPDATE ON message_attempts
 BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
 CREATE TRIGGER IF NOT EXISTS message_attempts_no_delete BEFORE DELETE ON message_attempts
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+
+-- INSERT OR REPLACE deletes the conflicting row before inserting. SQLite fires delete triggers for
+-- that only when a connection sets `PRAGMA recursive_triggers = ON`, which a plain connection (the
+-- sqlite3 CLI, a script) does not. These BEFORE INSERT guards run first on every connection and
+-- refuse any insert that would collide with an existing row, so REPLACE cannot rewrite history
+-- whoever opens the file.
+CREATE TRIGGER IF NOT EXISTS cases_no_replace BEFORE INSERT ON cases
+WHEN EXISTS (SELECT 1 FROM cases WHERE id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+CREATE TRIGGER IF NOT EXISTS cases_supersede_once BEFORE INSERT ON cases
+WHEN NEW.supersedes_case_id IS NOT NULL AND EXISTS (SELECT 1 FROM cases WHERE supersedes_case_id = NEW.supersedes_case_id)
+BEGIN SELECT RAISE(ABORT, 'already superseded'); END;
+CREATE TRIGGER IF NOT EXISTS cases_one_application BEFORE INSERT ON cases
+WHEN NEW.supersedes_case_id IS NULL AND EXISTS (
+  SELECT 1 FROM cases WHERE round_id = NEW.round_id AND child_id = NEW.child_id AND supersedes_case_id IS NULL)
+BEGIN SELECT RAISE(ABORT, 'duplicate application'); END;
+
+CREATE TRIGGER IF NOT EXISTS evidence_no_replace BEFORE INSERT ON evidence
+WHEN EXISTS (SELECT 1 FROM evidence WHERE id = NEW.id OR case_id = NEW.case_id)
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+
+CREATE TRIGGER IF NOT EXISTS rounds_no_replace BEFORE INSERT ON rounds
+WHEN EXISTS (SELECT 1 FROM rounds WHERE id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+
+CREATE TRIGGER IF NOT EXISTS round_events_no_replace BEFORE INSERT ON round_events
+WHEN EXISTS (SELECT 1 FROM round_events WHERE id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+
+CREATE TRIGGER IF NOT EXISTS case_events_no_replace BEFORE INSERT ON case_events
+WHEN EXISTS (SELECT 1 FROM case_events WHERE id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+
+CREATE TRIGGER IF NOT EXISTS verification_requests_no_replace BEFORE INSERT ON verification_requests
+WHEN EXISTS (SELECT 1 FROM verification_requests WHERE id = NEW.id)
+  OR (NEW.child_id IS NOT NULL AND EXISTS (
+    SELECT 1 FROM verification_requests
+    WHERE phone = NEW.phone AND reason = NEW.reason AND child_id = NEW.child_id AND round_id IS NEW.round_id))
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+
+-- A duplicate message is silently skipped rather than refused: dispatch relies on inserting
+-- the same (event, phone) twice being a no-op, and RAISE(IGNORE) also turns REPLACE into one.
+CREATE TRIGGER IF NOT EXISTS messages_no_replace BEFORE INSERT ON messages
+WHEN EXISTS (SELECT 1 FROM messages WHERE id = NEW.id OR (event_ref = NEW.event_ref AND phone = NEW.phone))
+BEGIN SELECT RAISE(IGNORE); END;
+
+CREATE TRIGGER IF NOT EXISTS message_attempts_no_replace BEFORE INSERT ON message_attempts
+WHEN EXISTS (SELECT 1 FROM message_attempts WHERE id = NEW.id)
 BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
 
 CREATE TRIGGER IF NOT EXISTS cases_no_update BEFORE UPDATE ON cases

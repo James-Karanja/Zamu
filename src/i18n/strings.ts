@@ -33,7 +33,7 @@ const en: Table = {
   smsAwarded: 'Zamu: {child} is awarded {amount} from {round}. Case {caseId}. The money goes to the school, not to you.',
   smsDisbursed: 'Zamu: {amount} for {child} has been paid to {school}. Case {caseId}. We will confirm with the school.',
   smsSchoolConfirmed: 'Zamu: {school} confirms it received {amount} for {child}. Case {caseId} is complete.',
-  smsRejected: 'Zamu: {child} was not selected for {round}. Case {caseId}. You keep your place for the next round.',
+  smsRejected: 'Zamu: {child} was not selected for {round}. Case {caseId}. You can apply again when the next round opens.',
 };
 
 const sw: Table = {
@@ -59,7 +59,7 @@ const sw: Table = {
   smsAwarded: 'Zamu: {child} amepewa {amount} kutoka {round}. Kesi {caseId}. Pesa huenda shuleni, si kwako.',
   smsDisbursed: 'Zamu: {amount} za {child} zimelipwa {school}. Kesi {caseId}. Tutathibitisha na shule.',
   smsSchoolConfirmed: 'Zamu: {school} imethibitisha ilipokea {amount} za {child}. Kesi {caseId} imekamilika.',
-  smsRejected: 'Zamu: {child} hakuchaguliwa {round}. Kesi {caseId}. Unabaki na nafasi yako raundi ijayo.',
+  smsRejected: 'Zamu: {child} hakuchaguliwa {round}. Kesi {caseId}. Unaweza kuomba tena raundi ijayo ikifunguliwa.',
 };
 
 export const TABLES: Record<Language, Table> = { sw, en };
