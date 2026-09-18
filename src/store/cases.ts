@@ -240,6 +240,61 @@ export function awardedTotal(db: DatabaseSync, roundId: string): number {
   return row.total;
 }
 
+// Verification requests — a child not yet on file cannot have an application, so the ask is recorded instead.
+
+export type VerificationReason = 'stale_evidence' | 'no_evidence' | 'new_child';
+
+export interface VerificationRequest {
+  id: number;
+  phone: string;
+  childId: string | null;
+  reason: VerificationReason;
+  note: string;
+  actorId: string;
+  actorRole: ActorRole;
+  at: string;
+}
+
+/**
+ * Records that a household needs a visit. An identical request is not repeated: the table is
+ * append-only, so a parent pressing the same key twice must not create two visits to chase.
+ * Returns whether a new request was recorded.
+ */
+export function requestVerification(
+  db: DatabaseSync,
+  input: { phone: string; childId?: string | null; reason: VerificationReason; note: string; actor: Actor },
+  at: string = now(),
+): boolean {
+  checkTimestamp(at);
+  const childId = input.childId ?? null;
+  const existing = db
+    .prepare('SELECT id FROM verification_requests WHERE phone = ? AND reason = ? AND child_id IS ?')
+    .get(input.phone, input.reason, childId);
+  if (existing) return false;
+  db.prepare(
+    'INSERT INTO verification_requests (phone, child_id, reason, note, actor_id, actor_role, at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  ).run(input.phone, childId, input.reason, input.note, input.actor.id, input.actor.role, at);
+  return true;
+}
+
+export function listVerificationRequests(db: DatabaseSync, phone?: string): VerificationRequest[] {
+  const rows = (
+    phone
+      ? db.prepare('SELECT * FROM verification_requests WHERE phone = ? ORDER BY id').all(phone)
+      : db.prepare('SELECT * FROM verification_requests ORDER BY id').all()
+  ) as unknown as Record<string, any>[];
+  return rows.map((r) => ({
+    id: r.id,
+    phone: r.phone,
+    childId: r.child_id ?? null,
+    reason: r.reason,
+    note: r.note,
+    actorId: r.actor_id,
+    actorRole: r.actor_role,
+    at: r.at,
+  }));
+}
+
 // Cases
 
 function nextCaseId(db: DatabaseSync): string {

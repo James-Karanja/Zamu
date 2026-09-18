@@ -11,7 +11,8 @@
     "seed": "node src/seed/run.ts",
     "test": "node --test \"test/**/*.test.ts\"",
     "typecheck": "tsc",
-    "web": "node src/web/run.ts"
+    "web": "node src/web/run.ts",
+    "ussd": "node src/ussd/run.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.1",

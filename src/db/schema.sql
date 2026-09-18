@@ -18,7 +18,9 @@ CREATE TABLE IF NOT EXISTS households (
   id            TEXT PRIMARY KEY,
   guardian_name TEXT NOT NULL CHECK (length(trim(guardian_name)) > 0),
   phone         TEXT NOT NULL CHECK (length(trim(phone)) > 0),
-  language      TEXT NOT NULL CHECK (language IN ('sw', 'en'))
+  language      TEXT NOT NULL CHECK (language IN ('sw', 'en')),
+  -- One household per number: the USSD session has no other way to tell them apart.
+  UNIQUE (phone)
 );
 
 CREATE TABLE IF NOT EXISTS children (
@@ -97,6 +99,26 @@ CREATE TABLE IF NOT EXISTS case_events (
   at         TEXT NOT NULL,
   CHECK ((stage = 'approved') = (amount IS NOT NULL))
 );
+
+-- A request is append-only like everything else; when resolution is added it belongs in a
+-- companion events table, never as a mutable column here.
+CREATE TABLE IF NOT EXISTS verification_requests (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  phone      TEXT NOT NULL CHECK (length(trim(phone)) > 0),
+  child_id   TEXT REFERENCES children(id),
+  reason     TEXT NOT NULL CHECK (reason IN ('stale_evidence', 'no_evidence', 'new_child')),
+  note       TEXT NOT NULL CHECK (length(trim(note)) > 0),
+  actor_id   TEXT NOT NULL CHECK (length(trim(actor_id)) > 0),
+  actor_role TEXT NOT NULL CHECK (actor_role IN ('parent', 'chv', 'teacher', 'clerk', 'committee', 'school', 'system')),
+  at         TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS verification_requests_by_phone ON verification_requests(phone);
+
+CREATE TRIGGER IF NOT EXISTS verification_requests_no_update BEFORE UPDATE ON verification_requests
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+CREATE TRIGGER IF NOT EXISTS verification_requests_no_delete BEFORE DELETE ON verification_requests
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
 
 CREATE TRIGGER IF NOT EXISTS cases_no_update BEFORE UPDATE ON cases
 BEGIN SELECT RAISE(ABORT, 'immutable record'); END;

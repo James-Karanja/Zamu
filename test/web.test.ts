@@ -79,7 +79,7 @@ test('a round page shows the ranked queue and the round money', async (t) => {
   assert.ok(firstPosition < secondPosition, 'queue order follows ranking');
 });
 
-test('a 40-entry page stays small enough for a weak connection', async (t) => {
+test('a full queue page stays small enough for a weak connection', async (t) => {
   const { get } = await serve(t);
   const res = await get(`/round/${OPEN_ROUND}`);
   assert.ok(Buffer.byteLength(res.body) < 50_000, `page is ${Buffer.byteLength(res.body)} bytes`);

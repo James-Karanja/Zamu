@@ -51,6 +51,12 @@ const ROUNDS = [
   { id: 'R-2026-T2', name: '2026 Term 2', budget: 180_000, opened: '2026-05-04', closed: null, applicants: CHILD_COUNT },
 ];
 
+/**
+ * Two children who applied in earlier rounds are left out of the open round, so a live demo
+ * can apply for them over USSD and watch the queue change.
+ */
+export const OPEN_ROUND_SKIPPED = [34, 35];
+
 /** Children 0–29 belong to households 0–29; children 30–39 are second children of households 0–9. */
 export const householdOf = (child: number) => (child < HOUSEHOLD_COUNT ? child : child - HOUSEHOLD_COUNT);
 const houseTypeOf = (h: number) => HOUSE_TYPES[h % 3];
@@ -124,6 +130,7 @@ function seedRounds(db: DatabaseSync): void {
     openRound(db, round.id, CLERK, at(round.opened, 0));
 
     for (let c = 0; c < round.applicants; c++) {
+      if (round.closed === null && OPEN_ROUND_SKIPPED.includes(c)) continue;
       let evidence = evidenceFor(c, ROUNDS.indexOf(round), round.opened);
       if (round.closed === null && childId(c) === CORRECTED_CHILD) evidence = { ...evidence, cattle: 0, hasGoatsOrPoultry: false };
       const caseId = createCase(db, { roundId: round.id, childId: childId(c), evidence, actor: parentOf(c) }, at(round.opened, c + 1));

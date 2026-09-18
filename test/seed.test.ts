@@ -5,7 +5,7 @@ import { openDatabase } from '../src/db/connection.ts';
 import { awardedTotal, getCaseHistory, listCurrentCases } from '../src/store/cases.ts';
 import { MAX_POINTS, scoreNeed } from '../src/scoring/model.ts';
 import { queuePriority } from '../src/scoring/priority.ts';
-import { CHILD_COUNT, CORRECTED_CHILD, FAKE_PHONE_PATTERN, seedDatabase } from '../src/seed/data.ts';
+import { CHILD_COUNT, CORRECTED_CHILD, FAKE_PHONE_PATTERN, OPEN_ROUND_SKIPPED, seedDatabase } from '../src/seed/data.ts';
 import { tempDir } from './helpers.ts';
 
 const OPEN_ROUND = 'R-2026-T2';
@@ -28,12 +28,22 @@ test('reseeding rebuilds a fresh database with identical counts', (t) => {
   assert.equal(first.rounds, 3);
 });
 
-test('open round holds one current case per applicant', (t) => {
+test('open round holds one current case per applicant, minus the live-demo children', (t) => {
   const { db } = seeded(t);
   const cases = listCurrentCases(db, OPEN_ROUND);
-  assert.equal(cases.length, CHILD_COUNT);
+  const expected = CHILD_COUNT - OPEN_ROUND_SKIPPED.length;
+  assert.equal(cases.length, expected);
   assert.ok(cases.every((c) => c.roundId === OPEN_ROUND));
-  assert.equal(new Set(cases.map((c) => c.childId)).size, CHILD_COUNT);
+  assert.equal(new Set(cases.map((c) => c.childId)).size, expected);
+  // The skipped children applied earlier, so they have evidence on file and can apply over USSD.
+  for (const index of OPEN_ROUND_SKIPPED) {
+    const childId = `CH-${String(index + 1).padStart(3, '0')}`;
+    assert.ok(!cases.some((c) => c.childId === childId), `${childId} should be unapplied`);
+    const priorEvidence = db
+      .prepare('SELECT COUNT(*) AS n FROM evidence e JOIN cases c ON c.id = e.case_id WHERE c.child_id = ?')
+      .get(childId) as { n: number };
+    assert.ok(priorEvidence.n > 0, `${childId} needs evidence on file`);
+  }
 });
 
 test('open round covers every band of the scoring module', (t) => {

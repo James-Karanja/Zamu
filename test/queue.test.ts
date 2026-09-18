@@ -5,7 +5,7 @@ import { openDatabase } from '../src/db/connection.ts';
 import { listRounds, maskName, publicEntry, publicQueue, rankRound, roundSummary } from '../src/queue/ranking.ts';
 import { RoundNotFoundError, correctCase, createCase, listCurrentCases } from '../src/store/cases.ts';
 import { CHV, PARENT, evidence, freshDb, tempDir } from './helpers.ts';
-import { CHILD_COUNT, seedDatabase } from '../src/seed/data.ts';
+import { CHILD_COUNT, OPEN_ROUND_SKIPPED, seedDatabase } from '../src/seed/data.ts';
 
 const OPEN_ROUND = 'R-2026-T2';
 
@@ -31,8 +31,9 @@ test('masked names identify a household without listing it', () => {
 test('a round ranks every current case by priority, positions from 1', (t) => {
   const db = seeded(t);
   const entries = rankRound(db, OPEN_ROUND);
-  assert.equal(entries.length, CHILD_COUNT);
-  assert.deepEqual(entries.map((e) => e.position), Array.from({ length: CHILD_COUNT }, (_, i) => i + 1));
+  const expected = CHILD_COUNT - OPEN_ROUND_SKIPPED.length;
+  assert.equal(entries.length, expected);
+  assert.deepEqual(entries.map((e) => e.position), Array.from({ length: expected }, (_, i) => i + 1));
   for (let i = 1; i < entries.length; i++) assert.ok(entries[i - 1].priority >= entries[i].priority);
   assert.equal(entries[0].priority, entries[0].need + entries[0].waitingBonus);
 });
