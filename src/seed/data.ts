@@ -6,7 +6,7 @@ import {
   awardedTotal, closeRound, correctCase, createCase, createRound, openRound, recordAward, recordStage,
   type Actor, type EvidenceInput, type HouseType,
 } from '../store/cases.ts';
-import { addChild, addHousehold, addSchool } from '../store/registry.ts';
+import { addChild, addHousehold, addSchool, addStaff } from '../store/registry.ts';
 import { rankRound } from '../queue/ranking.ts';
 
 export const WARD = 'Mwangaza Ward';
@@ -98,8 +98,23 @@ function evidenceFor(child: number, round: number, date: string): EvidenceInput 
   };
 }
 
+/** Everyone who acts on a case in the demo. Invented names; ids match the actors the seed records. */
+const STAFF = [
+  { id: 'CLERK-01', name: 'Grace Achola', role: 'clerk' as const },
+  { id: 'BC-01', name: 'Bursary Committee, Mwangaza Ward', role: 'committee' as const },
+  { id: 'CHV-01', name: 'Ruth Nekesa', role: 'chv' as const },
+  { id: 'CHV-02', name: 'Peter Kimani', role: 'chv' as const },
+  { id: 'CHV-03', name: 'Mary Atieno', role: 'chv' as const },
+  { id: 'TCH-01', name: 'John Mutua', role: 'teacher' as const },
+  { id: 'TCH-02', name: 'Esther Chepkoech', role: 'teacher' as const },
+  { id: 'TCH-03', name: 'Samuel Ouma', role: 'teacher' as const },
+];
+
 function seedRegistry(db: DatabaseSync): void {
   for (const s of SCHOOLS) addSchool(db, { ...s, county: COUNTY, ward: WARD });
+  for (const member of STAFF) addStaff(db, member);
+  // Each school acts through one account whose id is the school's own, so receipts are attributable.
+  for (const s of SCHOOLS) addStaff(db, { id: s.id, name: `${s.name} (bursar)`, role: 'school', schoolId: s.id });
   for (let h = 0; h < HOUSEHOLD_COUNT; h++) {
     addHousehold(db, {
       id: hhId(h),
@@ -126,7 +141,7 @@ const AWARD_AMOUNTS = [15_000, 12_500];
 function seedRounds(db: DatabaseSync): void {
   let closedRoundsSoFar = 0;
   ROUNDS.forEach((round) => {
-    createRound(db, { id: round.id, name: round.name, ward: WARD, currency: 'KES', budget: round.budget }, at(round.opened, 0));
+    createRound(db, { id: round.id, name: round.name, ward: WARD, currency: 'KES', budget: round.budget }, CLERK, at(round.opened, 0));
     openRound(db, round.id, CLERK, at(round.opened, 0));
 
     for (let c = 0; c < round.applicants; c++) {
@@ -214,7 +229,7 @@ export function seedDatabase(path: string): SeedCounts {
     seedRounds(db);
     seedCorrection(db);
     const counts: SeedCounts = {};
-    for (const table of ['schools', 'households', 'children', 'rounds', 'round_events', 'cases', 'evidence', 'case_events']) {
+    for (const table of ['schools', 'households', 'children', 'staff', 'rounds', 'round_events', 'cases', 'evidence', 'case_events']) {
       counts[table] = (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
     }
     return counts;

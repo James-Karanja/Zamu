@@ -34,3 +34,28 @@ export function addChild(
     c.id, c.householdId, c.schoolId, c.name, c.admissionNo,
   );
 }
+
+export type StaffRole = 'chv' | 'teacher' | 'clerk' | 'committee' | 'school';
+
+export interface StaffMember {
+  id: string;
+  name: string;
+  role: StaffRole;
+  schoolId: string | null;
+}
+
+export function addStaff(db: DatabaseSync, s: { id: string; name: string; role: StaffRole; schoolId?: string | null }): void {
+  db.prepare('INSERT INTO staff (id, name, role, school_id) VALUES (?, ?, ?, ?)').run(s.id, s.name, s.role, s.schoolId ?? null);
+}
+
+/** A staff member by id — the only place an acting role comes from. */
+export function getStaff(db: DatabaseSync, id: string): StaffMember | undefined {
+  const row = db.prepare('SELECT * FROM staff WHERE id = ?').get(id) as Record<string, any> | undefined;
+  return row ? { id: row.id, name: row.name, role: row.role, schoolId: row.school_id ?? null } : undefined;
+}
+
+export function listStaff(db: DatabaseSync): StaffMember[] {
+  return (db.prepare('SELECT * FROM staff ORDER BY role, id').all() as unknown as Record<string, any>[]).map((row) => ({
+    id: row.id, name: row.name, role: row.role, schoolId: row.school_id ?? null,
+  }));
+}

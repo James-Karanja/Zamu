@@ -9,7 +9,7 @@ import {
   closeRound, correctCase, createCase, createRound, getCase, openRound, recordAward, recordStage,
 } from '../src/store/cases.ts';
 import { addChild, addHousehold, addSchool } from '../src/store/registry.ts';
-import { CHV, CLERK, COMMITTEE, PARENT, evidence, tempDir } from './helpers.ts';
+import { CHV, CLERK, COMMITTEE, PARENT, evidence, registerStaff, tempDir } from './helpers.ts';
 
 const day = (n: number) => `2026-0${n}-01T08:00:00.000Z`;
 
@@ -18,12 +18,13 @@ function history(t: Parameters<typeof tempDir>[0]) {
   const db = openDatabase(join(tempDir(t), 'zamu.db'));
   t.after(() => db.close());
   addSchool(db, { id: 'SCH-T', name: 'Test School', county: 'County', ward: 'Ward' });
+  registerStaff(db);
   addHousehold(db, { id: 'HH-T', guardianName: 'Guardian', phone: '+254700000999', language: 'sw' });
   for (const id of ['CH-A', 'CH-B']) {
     addChild(db, { id, householdId: 'HH-T', schoolId: 'SCH-T', name: id, admissionNo: `ADM-${id}` });
   }
   for (const [i, id] of ['R-1', 'R-2', 'R-3'].entries()) {
-    createRound(db, { id, name: id, ward: 'Ward', currency: 'KES', budget: 50_000 }, day(i + 1));
+    createRound(db, { id, name: id, ward: 'Ward', currency: 'KES', budget: 50_000 }, CLERK, day(i + 1));
     openRound(db, id, CLERK, day(i + 1));
   }
   return db;
@@ -106,7 +107,7 @@ test('an earlier round that is still open earns no bonus yet', (t) => {
 test('a rejected application earns no waiting bonus', (t) => {
   const db = history(t);
   const first = apply(db, 'R-1', 'CH-A', 1);
-  recordStage(db, first, 'rejected', CLERK, day(1), 'evidence did not match the household');
+  recordStage(db, first, 'rejected', COMMITTEE, day(1), 'evidence did not match the household');
   closeRound(db, 'R-1', CLERK, day(2));
   const second = apply(db, 'R-2', 'CH-A', 2);
   assert.equal(queuePriorityOf(db, second).roundsWaited, 0);

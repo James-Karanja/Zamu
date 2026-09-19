@@ -10,7 +10,8 @@ import { escapeHtml, renderIndex, renderRound } from '../src/web/render.ts';
 import { seedDatabase } from '../src/seed/data.ts';
 import { rankRound, type PublicQueueEntry, type RoundSummary } from '../src/queue/ranking.ts';
 import { createRound, openRound } from '../src/store/cases.ts';
-import { CLERK, tempDir } from './helpers.ts';
+import { CLERK, registerStaff, tempDir } from './helpers.ts';
+import { addSchool } from '../src/store/registry.ts';
 
 const OPEN_ROUND = 'R-2026-T2';
 
@@ -49,7 +50,9 @@ async function serve(t: Parameters<typeof tempDir>[0]) {
 async function serveEmpty(t: Parameters<typeof tempDir>[0]) {
   const dir = mkdtempSync(join(tmpdir(), 'zamu-web-empty-'));
   const db = openDatabase(join(dir, 'zamu.db'));
-  createRound(db, { id: 'R-T', name: 'Empty Round', ward: 'Test Ward', currency: 'KES', budget: 10_000 });
+  addSchool(db, { id: 'SCH-T', name: 'Test School', county: 'Test County', ward: 'Test Ward' });
+  registerStaff(db);
+  createRound(db, { id: 'R-T', name: 'Empty Round', ward: 'Test Ward', currency: 'KES', budget: 10_000 }, CLERK);
   openRound(db, 'R-T', CLERK);
   return serveDb(t, db, dir);
 }

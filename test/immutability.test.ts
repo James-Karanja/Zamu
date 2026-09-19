@@ -30,6 +30,11 @@ const APPEND_ONLY = {
     replace: `INSERT OR REPLACE INTO verification_requests (id, phone, child_id, round_id, reason, note, actor_id, actor_role, at)
               VALUES (1, '+254700000999', NULL, NULL, 'new_child', 'rewritten', 'X', 'parent', '2026-05-04T08:00:00.000Z')`,
   },
+  refused_actions: {
+    update: "UPDATE refused_actions SET reason = 'nothing happened'",
+    replace: `INSERT OR REPLACE INTO refused_actions (id, actor_id, actor_role, target, attempted, reason, at)
+              VALUES (1, 'X', 'clerk', 'ZM-0001', 'verified', 'rewritten', '2026-05-04T08:00:00.000Z')`,
+  },
   rounds: {
     update: 'UPDATE rounds SET budget = 999999',
     replace: `INSERT OR REPLACE INTO rounds (id, name, ward, currency, budget, created_at)
@@ -42,6 +47,12 @@ function seedOneCase(db: ReturnType<typeof freshDb>): string {
   recordStage(db, caseId, 'verified', CHV);
   // Every append-only table needs a row, or a DELETE would pass on an empty table.
   requestVerification(db, { phone: '+254700000999', reason: 'new_child', note: 'home visit please', actor: PARENT });
+  // …and a refusal, so the refusal log has a row to attack.
+  try {
+    recordStage(db, caseId, 'disbursed', PARENT);
+  } catch {
+    // expected: a parent may not mark a bursary paid
+  }
   return caseId;
 }
 
@@ -62,7 +73,8 @@ for (const [table, sql] of Object.entries(APPEND_ONLY)) {
   test(`${table}: INSERT OR REPLACE over an existing row is rejected`, (t) => {
     const db = freshDb(t);
     seedOneCase(db);
-    assert.throws(() => db.exec(sql.replace), /immutable record/);
+    // The role guard may speak before the append-only guard; either way the rewrite is refused.
+    assert.throws(() => db.exec(sql.replace), /immutable record|duplicate application|already superseded|role not permitted/);
   });
 }
 
@@ -114,6 +126,10 @@ test('a plain connection, as the sqlite3 CLI would open it, cannot rewrite histo
     ['REPLACE round', () => plain.exec(
       "INSERT OR REPLACE INTO rounds (id, name, ward, currency, budget, created_at) SELECT id, name, ward, currency, 999999, created_at FROM rounds LIMIT 1",
     )],
+    ['REPLACE refused_action', () => {
+      plain.prepare("INSERT INTO refused_actions (actor_id, actor_role, target, attempted, reason, at) VALUES ('A', 'parent', 'ZM-0001', 'verified', 'x', '2026-05-04T08:00:00.000Z')").run();
+      plain.exec("INSERT OR REPLACE INTO refused_actions (id, actor_id, actor_role, target, attempted, reason, at) SELECT id, 'Y', 'clerk', target, attempted, 'rewritten', at FROM refused_actions ORDER BY id LIMIT 1");
+    }],
     ['REPLACE round_event', () => plain.exec(
       "INSERT OR REPLACE INTO round_events (id, round_id, type, actor_id, actor_role, at) SELECT id, round_id, 'closed', 'X', 'clerk', at FROM round_events ORDER BY id LIMIT 1",
     )],
@@ -121,7 +137,7 @@ test('a plain connection, as the sqlite3 CLI would open it, cannot rewrite histo
   const caseBefore = plain.prepare('SELECT child_id FROM cases WHERE id = ?').get(target.case_id) as { child_id: string };
   for (const [name, attack] of attacks) {
     // Whichever guard fires first, the write must be refused.
-    assert.throws(attack, /immutable record|duplicate application|already superseded/, `${name} was allowed on a plain connection`);
+    assert.throws(attack, /immutable record|duplicate application|already superseded|role not permitted/, `${name} was allowed on a plain connection`);
   }
   const after = plain.prepare('SELECT cattle FROM evidence WHERE case_id = ?').get(target.case_id) as { cattle: number };
   assert.equal(after.cattle, target.cattle, 'the evidence is unchanged after every attempt');

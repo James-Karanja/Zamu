@@ -51,20 +51,8 @@ export class NonGsmCharacterError extends Error {
   }
 }
 
-// The GSM 03.38 basic alphabet, plus the extension set, whose members cost two septets each.
-const GSM7_BASIC =
-  '@\u00a3$\u00a5\u00e8\u00e9\u00f9\u00ec\u00f2\u00c7\n\u00d8\u00f8\r\u00c5\u00e5\u0394_\u03a6\u0393\u039b\u03a9\u03a0\u03a8\u03a3\u0398\u039e\u00c6\u00e6\u00df\u00c9 !"#\u00a4%&\'()*+,-./0123456789:;<=>?' +
-  '\u00a1ABCDEFGHIJKLMNOPQRSTUVWXYZ\u00c4\u00d6\u00d1\u00dc\u00a7\u00bfabcdefghijklmnopqrstuvwxyz\u00e4\u00f6\u00f1\u00fc\u00e0';
-const GSM7_EXTENDED = '^{}\\[~]|\u20ac';
-
-/** Septets an SMS body costs: extension characters count double. */
-export function septetLength(body: string): number {
-  return [...body].reduce((total, char) => total + (GSM7_EXTENDED.includes(char) ? 2 : 1), 0);
-}
-
-export function nonGsmCharacters(body: string): string[] {
-  return [...new Set([...body].filter((char) => !GSM7_BASIC.includes(char) && !GSM7_EXTENDED.includes(char)))];
-}
+export { nonGsmCharacters, septetLength } from '../i18n/gsm.ts';
+import { nonGsmCharacters, septetLength } from '../i18n/gsm.ts';
 
 /** "1 round" / "2 rounds" / "raundi 2", so no parent reads "1 round(s)". */
 function roundsPhrase(language: Language, count: number): string {
@@ -221,6 +209,7 @@ interface StageEventRow {
   stage: string;
   amount: number | null;
   award_amount: number | null;
+  note: string | null;
   at: string;
   round_id: string;
   round_name: string;
@@ -234,7 +223,7 @@ interface StageEventRow {
 function queueStageChanges(db: DatabaseSync): number {
   const events = db
     .prepare(
-      `SELECT e.id AS id, e.case_id AS case_id, e.stage AS stage, e.amount AS amount, e.at AS at,
+      `SELECT e.id AS id, e.case_id AS case_id, e.stage AS stage, e.amount AS amount, e.at AS at, e.note AS note,
               (SELECT a.amount FROM case_events a WHERE a.case_id = e.case_id AND a.stage = 'approved'
                ORDER BY a.id DESC LIMIT 1) AS award_amount,
               c.round_id AS round_id, r.name AS round_name, r.currency AS currency,
@@ -279,6 +268,8 @@ function queueStageChanges(db: DatabaseSync): number {
       amount: money(event.amount ?? event.award_amount ?? 0, event.currency),
       school: event.school,
       code: USSD_CODE,
+      // The committee's written reason, which the store limits to fit one SMS.
+      reason: event.note ?? '',
     });
     if (
       body &&

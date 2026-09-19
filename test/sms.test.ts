@@ -9,10 +9,14 @@ import {
   dispatch, listMessages, nonGsmCharacters, pendingMessages, queuePending, renderBody, sendQueued, septetLength,
 } from '../src/sms/dispatch.ts';
 import { recordingSender } from '../src/sms/senders.ts';
-import { closeRound, createCase, listCurrentCases, recordAward, recordStage } from '../src/store/cases.ts';
+import { MAX_REASON_LENGTH, closeRound, createCase, listCurrentCases, recordAward, recordStage } from '../src/store/cases.ts';
 import { seedDatabase } from '../src/seed/data.ts';
 import { rankRound } from '../src/queue/ranking.ts';
 import { CHV, CLERK, COMMITTEE, PARENT, evidence, freshDb } from './helpers.ts';
+
+/** Actors the seed registers, for tests on the seeded database. */
+const SEED_CLERK = { id: 'CLERK-01', role: 'clerk' as const };
+const SEED_CHV = { id: 'CHV-01', role: 'chv' as const };
 
 const OPEN_ROUND = 'R-2026-T2';
 
@@ -63,7 +67,7 @@ test('a closed round is never announced as open', async (t) => {
 test('a household registered after a round closes is not invited to it', async (t) => {
   const db = seeded(t);
   await dispatch(db, recordingSender());
-  closeRound(db, OPEN_ROUND, CLERK);
+  closeRound(db, OPEN_ROUND, SEED_CLERK);
   db.prepare("INSERT INTO households (id, guardian_name, phone, language) VALUES ('HH-LATE', 'Late', '+254700000905', 'en')").run();
   db.prepare("INSERT INTO children (id, household_id, school_id, name, admission_no) VALUES ('CH-LATE', 'HH-LATE', 'SCH-1', 'Late Child', 'ADM-LATE')").run();
   const report = await dispatch(db, recordingSender());
@@ -135,13 +139,14 @@ test('award, payment and confirmation each name the amount and the school', asyn
 test('a rejected case is told, and keeps its place for the next round', async (t) => {
   const db = freshDb(t);
   const caseId = createCase(db, { roundId: 'R-T', childId: 'CH-A', evidence: evidence(), actor: PARENT });
-  recordStage(db, caseId, 'rejected', CLERK, undefined, 'evidence did not match');
+  recordStage(db, caseId, 'rejected', COMMITTEE, undefined, 'evidence did not match');
   await dispatch(db, recordingSender());
   const message = listMessages(db).find((m) => m.template === 'smsRejected')!;
   assert.ok(message);
-  // The test household's language is Swahili, so assert the message in either language.
-  assert.match(message.body, /not selected|hakuchaguliwa/i);
-  assert.match(message.body, /apply again|kuomba tena/i);
+  // The test household registered in Swahili.
+  assert.match(message.body, /hakuchaguliwa/);
+  assert.match(message.body, /Sababu: evidence did not match/, 'the committee\'s reason reaches the parent');
+  assert.match(message.body, /Omba tena/);
 });
 
 test('dispatching twice queues nothing and sends nothing the second time', async (t) => {
@@ -162,7 +167,7 @@ test('a new stage change after dispatch queues only its own message', async (t) 
   const before = listMessages(db).length;
 
   const target = listCurrentCases(db, OPEN_ROUND).find((c) => c.currentStage === 'applied')!;
-  recordStage(db, target.id, 'verified', CHV);
+  recordStage(db, target.id, 'verified', SEED_CHV);
   const sender = recordingSender();
   const report = await dispatch(db, sender);
 
@@ -279,7 +284,7 @@ test('closing a round sends nothing: the totals message belongs to a later story
   const db = seeded(t);
   await dispatch(db, recordingSender());
   const before = listMessages(db).length;
-  closeRound(db, OPEN_ROUND, CLERK);
+  closeRound(db, OPEN_ROUND, SEED_CLERK);
   const report = await dispatch(db, recordingSender());
   assert.equal(report.queued, 0);
   assert.equal(listMessages(db).length, before);
@@ -295,4 +300,16 @@ test('an award recorded now reaches the parent with the right amount', async (t)
   const awarded = sender.sent.find((m) => m.template === 'smsAwarded')!;
   assert.match(awarded.body, /KES 12,345/);
   assert.equal(awarded.phone, '+254700000999');
+});
+
+test('the longest reason the store accepts still fits the rejection SMS in both languages', () => {
+  for (const language of ['en', 'sw'] as const) {
+    const body = renderBody(language, 'smsRejected', {
+      child: 'Wairimu Nyambura-Kilonzo',
+      round: '2026 Term 2',
+      caseId: 'ZM-0106',
+      reason: 'x'.repeat(MAX_REASON_LENGTH),
+    });
+    assert.ok(body.length <= MAX_SMS, `${language}: ${body.length} characters`);
+  }
 });

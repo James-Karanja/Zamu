@@ -52,11 +52,13 @@ Switch to the browser. Their row is on the page.
 
 ## Act 4 (30s) — every decision reaches them
 
-> "Verified. Awarded twelve thousand. Paid to the school — not to the family. And the school confirms it received the money. The last message closes the loop that audits keep finding open.
+> "First, the parent tries to verify their own case — and is refused. Each step belongs to one role: a volunteer verifies, the committee awards, the clerk pays, and only the child's own school can confirm the money arrived. Nobody who pays also vouches for need.
 >
-> One honest note: the volunteer, committee and school screens aren't built yet. The script records those steps itself, and says so on screen."
+> Then: verified, awarded twelve thousand, paid to the school — not to the family — and the school confirms it. The last message closes the loop that audits keep finding open."
 
-**Point at:** `Pesa huenda shuleni, si kwako` (the money goes to the school, not to you), and the `Simulated:` line.
+**Point at:** `only a community health volunteer or teacher may do this`, then `Pesa huenda shuleni, si kwako` (the money goes to the school, not to you).
+
+*Optional, if you have 20 seconds:* run `ZAMU_DB=data/demo.db npm run admin` and show the staff dashboard at `http://127.0.0.1:4002` — pick yourself from the staff list, and try an action your role doesn't own to show the refusal banner.
 
 ## Act 5 (45s) — the strongest moment
 
@@ -74,7 +76,7 @@ Let the three refusals land before speaking.
 
 > "The same core works anywhere: append-only records, attributed actions, one published rule. Language, currency, funding cycle and the scoring inputs are configuration.
 >
-> What isn't built is written down in the README: the admin and volunteer screens, school confirmation, round-totals SMS, anonymous reporting. So are the limits — identity is just the phone number today, and someone who can change the database's schema could still remove its protections. A hash chain over events is the next step that would make even that detectable.
+> What isn't built is written down in the README: volunteer evidence capture in the field, round-totals SMS, anonymous reporting. So are the limits — identity is just the phone number today, and someone who can change the database's schema could still remove its protections. A hash chain over events is the next step that would make even that detectable.
 >
 > Zamu can't make the bursary pot bigger. It makes waiting fair, and it makes jumping the queue impossible to hide."
 
@@ -83,6 +85,7 @@ Let the three refusals land before speaking.
 ## If something goes wrong
 
 - **The demo fails a check:** it stops, prints `ACT n FAILED` with the claim that did not hold, and exits non-zero. Don't record until it's green.
+- **The dashboard doesn't start:** it needs a database too — `ZAMU_DB=data/demo.db npm run admin` shows the demo's round.
 - **The browser doesn't show their case:** the web server is reading a different database. Restart it with `ZAMU_DB=data/demo.db npm run web` after running the demo.
 - **`npm run web` won't start:** it refuses to run without a database. Run the demo (or `npm run seed`) first.
 

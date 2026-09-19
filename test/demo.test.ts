@@ -66,7 +66,7 @@ test('the story on screen agrees with itself', () => {
   assert.match(out, /waiting \+10/, 'the queue shows the wait the SMS promised');
   assert.match(out, /The database answers: {3}immutable record/);
   assert.match(out, /\(original\)/);
-  assert.match(out, /Simulated:/, 'unbuilt steps are labelled as simulated');
+  assert.match(out, /Refused: HH-\d+ \(parent\) may not verify a case/, 'the parent cannot vouch for their own need');
 });
 
 test('running the demo twice prints the same thing', () => {
@@ -90,7 +90,7 @@ test('the demo never touches the working database', () => {
 test('the README documents the commands that exist', () => {
   const readme = readFileSync(join(root, 'README.md'), 'utf8');
   const scripts = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).scripts as Record<string, string>;
-  for (const command of ['seed', 'demo', 'web', 'ussd', 'sms']) {
+  for (const command of ['seed', 'demo', 'web', 'ussd', 'sms', 'admin']) {
     assert.ok(scripts[command], `package.json is missing ${command}`);
     assert.ok(readme.includes(`npm run ${command}`), `README omits npm run ${command}`);
   }

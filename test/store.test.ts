@@ -40,7 +40,7 @@ test('create case in a closed round is rejected', (t) => {
 
 test('create case in a round that was never opened is rejected', (t) => {
   const db = freshDb(t);
-  createRound(db, { id: 'R-NEW', name: 'Unopened', ward: 'Test Ward', currency: 'KES', budget: 10_000 });
+  createRound(db, { id: 'R-NEW', name: 'Unopened', ward: 'Test Ward', currency: 'KES', budget: 10_000 }, CLERK);
   assert.throws(
     () => createCase(db, { roundId: 'R-NEW', childId: 'CH-A', evidence: evidence(), actor: PARENT }),
     RoundNotOpenError,
@@ -149,7 +149,7 @@ test('blank correction reasons and blank actors are rejected by the database', (
         `INSERT INTO case_events (case_id, stage, amount, note, actor_id, actor_role, at)
          VALUES ('${id}', 'verified', NULL, NULL, '  ', 'chv', '2026-05-04T09:00:00.000Z')`,
       ),
-    /CHECK constraint failed/,
+    /CHECK constraint failed|role not permitted/,
   );
 });
 
@@ -158,7 +158,7 @@ test('decision stages cannot be recorded once the round is closed', (t) => {
   const id = apply(db);
   closeRound(db, 'R-T', CLERK);
   assert.throws(() => recordStage(db, id, 'verified', CHV), RoundNotOpenError);
-  assert.throws(() => recordStage(db, id, 'rejected', CLERK), RoundNotOpenError);
+  assert.throws(() => recordStage(db, id, 'rejected', COMMITTEE, undefined, 'too late'), RoundNotOpenError);
 });
 
 test('advancing stages appends events and current stage is the latest', (t) => {
@@ -185,7 +185,7 @@ test('stages cannot skip, repeat, or follow a final stage', (t) => {
   assert.throws(() => recordAward(db, id, 15_000, COMMITTEE), InvalidTransitionError);
   recordStage(db, id, 'disbursed', CLERK);
   recordStage(db, id, 'school_confirmed', { id: 'SCH-T', role: 'school' });
-  assert.throws(() => recordStage(db, id, 'rejected', CLERK), InvalidTransitionError);
+  assert.throws(() => recordStage(db, id, 'rejected', COMMITTEE, undefined, 'after the fact'), InvalidTransitionError);
   assert.deepEqual(getCase(db, id).events.map((e) => e.stage), ['applied', 'verified', 'approved', 'disbursed', 'school_confirmed']);
 });
 
@@ -251,7 +251,7 @@ test('a correction cannot predate the case it corrects', (t) => {
 test('round events cannot be backdated', (t) => {
   const db = freshDb(t);
   assert.throws(() => closeRound(db, 'R-T', CLERK, '2026-04-30T08:00:00.000Z'), InvalidTimestampError);
-  createRound(db, { id: 'R-3', name: 'Third', ward: 'Test Ward', currency: 'KES', budget: 1_000 }, ROUND_CREATED_AT);
+  createRound(db, { id: 'R-3', name: 'Third', ward: 'Test Ward', currency: 'KES', budget: 1_000 }, CLERK, ROUND_CREATED_AT);
   assert.throws(() => openRound(db, 'R-3', CLERK, '2026-04-01T08:00:00.000Z'), InvalidTimestampError);
   assert.ok(ROUND_OPENED_AT > ROUND_CREATED_AT);
 });
@@ -262,7 +262,7 @@ test('rounds open once, close once, and never reopen', (t) => {
   closeRound(db, 'R-T', CLERK);
   assert.throws(() => closeRound(db, 'R-T', CLERK), RoundStateError);
   assert.throws(() => openRound(db, 'R-T', CLERK), RoundStateError);
-  createRound(db, { id: 'R-NEW', name: 'Unopened', ward: 'Test Ward', currency: 'KES', budget: 1_000 });
+  createRound(db, { id: 'R-NEW', name: 'Unopened', ward: 'Test Ward', currency: 'KES', budget: 1_000 }, CLERK);
   assert.throws(() => closeRound(db, 'R-NEW', CLERK), RoundStateError);
   assert.throws(() => openRound(db, 'R-NOPE', CLERK), RoundNotFoundError);
 });
@@ -292,7 +292,7 @@ test('listCurrentCases excludes superseded cases, keeps insertion order, and fil
   const a2 = correctCase(db, a, { evidence: evidence({ cattle: 4 }), reason: 'fix', actor: CHV });
   assert.deepEqual(listCurrentCases(db, 'R-T').map((c) => c.id), [b, a2]);
 
-  createRound(db, { id: 'R-2', name: 'Second', ward: 'Test Ward', currency: 'KES', budget: 50_000 }, '2026-06-01T07:00:00.000Z');
+  createRound(db, { id: 'R-2', name: 'Second', ward: 'Test Ward', currency: 'KES', budget: 50_000 }, CLERK, '2026-06-01T07:00:00.000Z');
   openRound(db, 'R-2', CLERK, '2026-06-01T08:00:00.000Z');
   const other = createCase(
     db,

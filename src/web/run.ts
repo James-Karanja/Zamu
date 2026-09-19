@@ -7,5 +7,5 @@ runServer({
   defaultPort: 4000,
   open: openReadOnly,
   create: createServer,
-  banner: (port, path) => `Zamu public queue on http://localhost:${port} (database: ${path}, read-only)`,
+  banner: (address, path) => `Zamu public queue on ${address} (database: ${path}, read-only)`,
 });

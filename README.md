@@ -27,6 +27,7 @@ Zamu cannot make the pot bigger. It makes the allocation **visible, checkable an
 | **Waiting counts** | Ten points for every closed round a child applied in without an award, so a parent knows when their turn comes. A rejected application earns nothing. |
 | **Records that cannot be altered** | Cases, evidence, rounds and every state change are append-only, enforced by the database. A correction creates a **new linked case**; the original stays readable. |
 | **A basic phone is enough** | Apply over USSD in three key presses, in Swahili or English, after a consent screen. No literacy assumption beyond a numbered menu. |
+| **Each step has one owner** | A volunteer or teacher verifies, the committee rejects (with a reason the parent receives) and awards, the clerk pays, and only the child's own school confirms receipt. Roles are looked up in the staff register, never taken from the caller, and the same map is enforced by the database itself. |
 | **The system speaks first** | Round openings and every decision on a case — verified, awarded, paid, confirmed, rejected — become SMS derived from the event log, so no decision can be missed: each gets its message the next time dispatch runs. |
 
 ## Run it
@@ -47,7 +48,12 @@ Then, in separate terminals:
 npm run web      # public queue at http://localhost:4000
 npm run ussd     # USSD endpoint at http://localhost:4001/ussd
 npm run sms      # dispatch pending SMS and print the outbox
+npm run admin    # staff dashboard at http://127.0.0.1:4002 (localhost only)
 ```
+
+The staff dashboard runs a round end to end — create and open it, verify, reject with a reason, award within budget, mark paid, confirm receipt, close it, and queue the SMS — without touching the database. Pick yourself from the staff list at the top; the server looks up your role and refuses anything that role doesn't own, logging the attempt. It only listens on `127.0.0.1` (`ADMIN_PORT` changes the port; it refuses to start on a network address), and every form carries a per-process token, so a page on another site cannot drive it. Queuing writes the messages; sending stays a separate `npm run sms`.
+
+If the dashboard shows no staff, the database predates the staff register: run `npm run seed` again.
 
 Drive the USSD endpoint the way Africa's Talking will. Each request carries the whole keypress history in `text`; this household has a child with evidence on file who has not applied yet:
 
@@ -66,8 +72,8 @@ To use the Africa's Talking simulator instead, expose port 4001 with a tunnel (n
 
 ## Why you can trust what it shows
 
-- **Many independent witnesses, no single point to bribe.** Every parent can check any place in the queue, and each round's budget, awards and recipient count are public. The design adds two more witnesses — a volunteer or teacher capturing household evidence, and the school confirming the money arrived — which today are **simulated in the seed** (story 7 is not built).
-- **Records that refuse to change.** Cases, evidence, rounds, stage and round events, verification requests, messages and send attempts are append-only. The database refuses `UPDATE`, `DELETE` and `INSERT OR REPLACE` on them for **every connection**, including a plain `sqlite3` session with none of Zamu's settings. Act 5 of the demo opens exactly such a connection and shows the refusals. This prevents changes; it does not yet *detect* them (see limitations).
+- **Many independent witnesses, no single point to bribe.** Every parent can check any place in the queue, and each round's budget, awards and recipient count are public. A volunteer or teacher verifies each case and the child's own school confirms the money arrived, each from the staff dashboard. The household evidence itself (photos, GPS) is seeded, because field capture — story 7 — is not built.
+- **Records that refuse to change.** Cases, evidence, rounds, stage and round events, verification requests, messages, send attempts and refused actions are append-only. The database refuses `UPDATE`, `DELETE` and `INSERT OR REPLACE` on them for **every connection**, including a plain `sqlite3` session with none of Zamu's settings. Act 5 of the demo opens exactly such a connection and shows the refusals. The role map is enforced there too: a direct `INSERT` cannot record a stage under the wrong role, as someone who is not registered, or past a round's budget. This prevents changes; it does not yet *detect* them (see limitations).
 - **Every action is attributed.** Each case, correction, stage change and round event stores who did it and in what role.
 - **Consent first.** No application is created until the parent agrees on screen; declining creates nothing. One thing is written earlier: if a parent picks a child with no evidence on file, or their household has no child registered, Zamu records a home-visit request instead of an application. That request holds no information about the child's circumstances.
 - **The public page shows numbers, not households.** Photos, GPS, phone numbers, full names and the score breakdown never appear on it; a test scans every public response for them. A parent sees their own breakdown over USSD.
@@ -81,11 +87,11 @@ To use the Africa's Talking simulator instead, expose port 4001 with a tunnel (n
 3. Public queue page
 4. USSD flow (apply, my place, my score, add a child)
 5. SMS notifications derived from the event log
+6. Staff dashboard and role-based stage flow
 
 **Not built** — specified, not implemented:
 
-6. Admin dashboard and role-based stage flow
-7. Volunteer evidence capture and school confirmation *(simulated in the seed today)*
+7. Volunteer evidence capture in the field — photos and GPS are seeded today, not captured
 8. Round-totals SMS when a round closes
 9. Anonymous reporting over USSD, opening an independent review
 
@@ -95,10 +101,10 @@ To use the Africa's Talking simulator instead, expose port 4001 with a tunnel (n
 - **A duplicate SMS is possible** if the process dies between the provider accepting a message and the write recording it. Closing that needs a provider idempotency key.
 - **No opt-out yet.** Inbound SMS is out of scope, so there is no STOP handling or suppression flag.
 - **Append-only is prevention, not detection.** Someone who can change the database *schema* (drop a trigger, use `PRAGMA writable_schema`) could still remove the protections. A hash chain over events would make that detectable, and is the natural next step.
-- **The registry is editable by design.** Schools, households and children change in real life (a phone number, a school transfer), so those tables are not append-only yet — which means a household's phone or a child's school can be changed without a trail. A history table for the registry is the fix.
+- **The registry is editable by design.** Schools, households, children and staff change in real life (a phone number, a school transfer, a new clerk), so those tables are not append-only yet — which means a phone, a child's school or a staff member's role can be changed without a trail, and a child's school decides which bursar may confirm their fees. A history table for the registry is the fix.
 - **Passed-over applicants hear nothing.** A case explicitly rejected gets an SMS; one simply not reached before a round closes does not. That message belongs with the round-totals SMS (story 8).
 - **Erasure and rectification** (Kenya's Data Protection Act 2019) sit awkwardly with immutable records: corrections supersede, they never delete. A production system needs a documented redaction approach.
-- **Roles are recorded but not enforced.** Any actor can record any stage; that is story 6.
+- **The dashboard trusts who you say you are.** Role rules are enforced on every action and requests must come from the dashboard's own pages, but there is no login: anyone at this machine can pick any name from the staff list. A deployment needs real sign-in before those rules protect against staff themselves.
 
 ## Architecture
 
@@ -110,6 +116,7 @@ src/
   scoring/     model.ts — the published need score; priority.ts — waiting bonus and queue priority
   queue/       ranking.ts — one ranking rule, used by the page, USSD, SMS and the seed
   web/         read-only public queue (server-rendered, no JavaScript)
+  admin/       staff dashboard (localhost only, token-checked forms); every action goes through the store's role rules
   ussd/        stateless Africa's Talking USSD session and server
   sms/         dispatch.ts — derives messages from the event log; senders.ts — recording and live
   i18n/        Swahili and English message tables, shared by USSD and SMS

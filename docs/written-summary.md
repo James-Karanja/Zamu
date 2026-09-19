@@ -22,7 +22,7 @@ I considered also entering *Safety, Reporting & Protection*, since anonymous rep
 - **The parent's own application**, made on a basic phone after a consent screen.
 - **Every decision**, recorded with who made it and in what role — verification, award, payment to the school, and the school's confirmation that the money arrived.
 
-In the proof of concept all data is synthetic, and volunteer capture and school confirmation are simulated by the seed data. Their screens are specified but not built.
+In the proof of concept all data is synthetic. Volunteers verify cases and schools confirm receipt from the staff dashboard; the household evidence itself is seeded, because field capture of photos and GPS is specified but not built.
 
 **What the problem statement rests on.**
 
@@ -37,13 +37,13 @@ In the proof of concept all data is synthetic, and volunteer capture and school 
 
 **Records that refuse to change.** Cases, evidence, rounds and every stage change are append-only. The database refuses `UPDATE`, `DELETE` and `INSERT OR REPLACE` on those tables for *any* connection, including someone opening the file directly. A correction — say, a volunteer finding seven cattle that were moved to a neighbour's homestead for the first visit — creates a new case linked to the original, and both stay readable. The demo's final act attempts all three edits through a plain database connection and shows each refusal.
 
-**Many witnesses, no single person to bribe.** The whole ward can see the queue: position, score, waiting bonus and award, per round, with each round's budget and total awarded. The parent sees their own breakdown privately over USSD. The school confirms receipt. Every action is attributed to a person and a role.
+**Many witnesses, no single person to bribe.** The whole ward can see the queue: position, score, waiting bonus and award, per round, with each round's budget and total awarded. The parent sees their own breakdown privately over USSD. Each step has one owner — a volunteer or teacher verifies, the committee awards or rejects with a reason the parent receives, the clerk pays, and only the child's own school confirms receipt. Roles are looked up in the staff register rather than taken from whoever is asking, anything else is refused and logged, and the database enforces the same map even against someone editing the file directly. Nobody who pays also vouches for need.
 
 **Privacy by construction.** Names on the public page are masked (`F. W****`), enough for a neighbour to recognise a household but not enough for a stranger to compile a list of poor families. Photos, GPS, phone numbers and the score breakdown never appear publicly, and a test scans every public response for them. No application exists until the parent consents on screen.
 
 **Built for the people it serves.** USSD needs no smartphone and no data: applying takes three key presses. Every screen and SMS is in Swahili or English, every screen fits one USSD page, and every SMS fits a single GSM-7 message, enforced in code rather than hoped for.
 
-**Honest about its limits.** The README lists what is not built (the admin dashboard, volunteer and school screens, round-totals SMS, anonymous reporting) and what is not solved. Identity is only the caller's phone number. Append-only prevents changes but cannot yet *detect* someone who alters the schema itself; a hash chain over events is the next step. Immutable records sit awkwardly with the right to erasure under Kenya's Data Protection Act 2019, which needs a documented redaction approach before any pilot.
+**Honest about its limits.** The README lists what is not built (field evidence capture, round-totals SMS, anonymous reporting) and what is not solved. Identity is only the caller's phone number, and the staff dashboard has no login: its role rules are real, but who is acting is on trust. Append-only prevents changes but cannot yet *detect* someone who alters the schema itself; a hash chain over events is the next step. Immutable records sit awkwardly with the right to erasure under Kenya's Data Protection Act 2019, which needs a documented redaction approach before any pilot.
 
 ## 4. How I used AI tools
 

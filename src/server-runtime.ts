@@ -10,10 +10,13 @@ export interface RunOptions {
   defaultPort: number;
   open: (path: string) => DatabaseSync;
   create: (db: DatabaseSync) => Server;
-  banner: (port: number, path: string) => string;
+  /** Told the address the socket really bound to, not the one that was asked for. */
+  banner: (address: string, path: string) => string;
+  /** Interface to bind; defaults to all interfaces. The staff dashboard passes 127.0.0.1. */
+  host?: string;
 }
 
-export function runServer({ envVar, defaultPort, open, create, banner }: RunOptions): void {
+export function runServer({ envVar, defaultPort, open, create, banner, host }: RunOptions): void {
   const configured = process.env[envVar]?.trim();
   // Plain decimal only: `0x1f`, `1e3` and `0` are configuration mistakes, not ports.
   if (configured !== undefined && configured !== '' && !/^\d+$/.test(configured)) {
@@ -46,7 +49,16 @@ export function runServer({ envVar, defaultPort, open, create, banner }: RunOpti
     process.exit(1);
   });
 
-  server.listen(port, () => console.log(banner(port, path)));
+  const announce = () => {
+    const bound = server.address();
+    const address =
+      bound && typeof bound === 'object'
+        ? `http://${bound.family === 'IPv6' ? `[${bound.address}]` : bound.address}:${bound.port}`
+        : `http://localhost:${port}`;
+    console.log(banner(address, path));
+  };
+  if (host) server.listen(port, host, announce);
+  else server.listen(port, announce);
 
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.on(signal, () => {

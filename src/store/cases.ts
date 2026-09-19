@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { nonGsmCharacters } from '../i18n/gsm.ts';
 
 export const STAGES = ['applied', 'verified', 'approved', 'disbursed', 'school_confirmed', 'rejected'] as const;
 export type Stage = (typeof STAGES)[number];
@@ -139,7 +140,172 @@ export class InvalidTimestampError extends Error {
   }
 }
 
+// Who may do what. Nobody who pays also vouches for need; a school confirms only its own pupils.
+export type Action =
+  | 'create_round' | 'open_round' | 'close_round' | 'dispatch_sms' | 'apply' | 'correct'
+  | 'verified' | 'rejected' | 'approved' | 'disbursed' | 'school_confirmed';
+
+/** Frozen: nothing can widen the rules at runtime. */
+export const PERMITTED_ROLES: Readonly<Record<Action, readonly ActorRole[]>> = Object.freeze({
+  create_round: Object.freeze(['clerk'] as ActorRole[]),
+  open_round: Object.freeze(['clerk'] as ActorRole[]),
+  close_round: Object.freeze(['clerk'] as ActorRole[]),
+  dispatch_sms: Object.freeze(['clerk'] as ActorRole[]),
+  apply: Object.freeze(['parent', 'clerk'] as ActorRole[]),
+  correct: Object.freeze(['chv', 'teacher'] as ActorRole[]),
+  verified: Object.freeze(['chv', 'teacher'] as ActorRole[]),
+  rejected: Object.freeze(['committee'] as ActorRole[]),
+  approved: Object.freeze(['committee'] as ActorRole[]),
+  disbursed: Object.freeze(['clerk'] as ActorRole[]),
+  school_confirmed: Object.freeze(['school'] as ActorRole[]),
+});
+
+/** Plain-English verbs and role names for refusal messages staff will read. */
+const ACTION_PHRASES: Record<Action, string> = {
+  create_round: 'create a round',
+  open_round: 'open a round',
+  close_round: 'close a round',
+  dispatch_sms: 'send the SMS queue',
+  apply: 'make an application',
+  correct: 'correct evidence',
+  verified: 'verify a case',
+  rejected: 'reject a case',
+  approved: 'award a bursary',
+  disbursed: 'mark a bursary paid',
+  school_confirmed: 'confirm receipt',
+};
+
+export const ROLE_NAMES: Record<string, string> = {
+  parent: 'parent',
+  chv: 'community health volunteer',
+  teacher: 'teacher',
+  clerk: 'clerk',
+  committee: 'bursary committee',
+  school: 'school bursar',
+  system: 'system',
+};
+
+const roleName = (role: string) => ROLE_NAMES[role] ?? role;
+
+export class RoleNotPermittedError extends Error {
+  constructor(actor: Actor, attempted: Action, reason: string) {
+    super(`${actor.id} (${roleName(actor.role)}) may not ${ACTION_PHRASES[attempted] ?? attempted}: ${reason}`);
+    this.name = 'RoleNotPermittedError';
+  }
+}
+export class MissingReasonError extends Error {
+  constructor(caseId: string, detail = 'needs a written reason') {
+    super(`rejecting ${caseId} ${detail}`);
+    this.name = 'MissingReasonError';
+  }
+}
+export class UnknownCapturerError extends Error {
+  constructor(capturer: string, role: string) {
+    super(`evidence names ${capturer} as a ${roleName(role)}, but no such person is registered`);
+    this.name = 'UnknownCapturerError';
+  }
+}
+
+/** A rejection reason reaches the parent in an SMS, so it must fit and use the SMS alphabet. */
+export const MAX_REASON_LENGTH = 50;
+
 const now = () => new Date().toISOString();
+
+/**
+ * Records a refused action and raises it. The row is written outside any transaction, so the
+ * refusal survives even though the action itself never happens.
+ */
+function refuse(db: DatabaseSync, actor: Actor, target: string, attempted: Action, reason: string): never {
+  db.prepare(
+    'INSERT INTO refused_actions (actor_id, actor_role, target, attempted, reason, at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(actor.id?.trim() || '(none)', actor.role?.trim() || '(none)', target?.trim() || '(none)', attempted, reason, now());
+  throw new RoleNotPermittedError(actor, attempted, reason);
+}
+
+interface ResolvedActor {
+  id: string;
+  role: ActorRole;
+  schoolId: string | null;
+}
+
+/**
+ * Who the actor really is. The role is taken from the registry — staff for staff, households for
+ * parents — never from what the caller claims, so a caller cannot promote itself.
+ */
+function resolveActor(db: DatabaseSync, actor: Actor): ResolvedActor | undefined {
+  if (actor.role === 'parent') {
+    const household = db.prepare('SELECT id FROM households WHERE id = ?').get(actor.id);
+    return household ? { id: actor.id, role: 'parent', schoolId: null } : undefined;
+  }
+  const staff = db.prepare('SELECT id, role, school_id FROM staff WHERE id = ?').get(actor.id) as
+    | { id: string; role: ActorRole; school_id: string | null }
+    | undefined;
+  return staff ? { id: staff.id, role: staff.role, schoolId: staff.school_id } : undefined;
+}
+
+/** Refuses and logs unless the registered person holds a role the map permits for this action. */
+function requireRole(db: DatabaseSync, actor: Actor, target: string, attempted: Action): ResolvedActor {
+  const resolved = resolveActor(db, actor);
+  if (!resolved) refuse(db, actor, target, attempted, `${actor.id || 'this id'} is not a registered ${roleName(actor.role)}`);
+  if (resolved.role !== actor.role) {
+    refuse(db, actor, target, attempted, `${actor.id} is registered as a ${roleName(resolved.role)}, not a ${roleName(actor.role)}`);
+  }
+  const allowed = PERMITTED_ROLES[attempted];
+  if (!allowed.includes(resolved.role)) {
+    refuse(db, actor, target, attempted, `only a ${allowed.map(roleName).join(' or ')} may do this`);
+  }
+  return resolved;
+}
+
+/**
+ * Logs an attempt by someone the registry does not know at all (the dashboard's forged or stale
+ * staff id). Forged identities are the most suspicious attempts, so they belong on the record too.
+ */
+export function recordUnregisteredAttempt(db: DatabaseSync, claimedId: string, target: string, attempted: string): void {
+  db.prepare(
+    'INSERT INTO refused_actions (actor_id, actor_role, target, attempted, reason, at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(claimedId.trim().slice(0, 64) || '(none)', '(unregistered)', target.trim() || '(none)', attempted, 'not on the staff list', now());
+}
+
+/** For callers outside the store (the dashboard's SMS button): the same check, the same log. */
+export function checkPermitted(db: DatabaseSync, actor: Actor, target: string, attempted: Action): void {
+  requireRole(db, actor, target, attempted);
+}
+
+/** A school may confirm receipt only for a child registered at that school. */
+function requireOwnSchool(db: DatabaseSync, actor: Actor, school: ResolvedActor, caseId: string): void {
+  const row = db
+    .prepare('SELECT ch.school_id AS school FROM cases c JOIN children ch ON ch.id = c.child_id WHERE c.id = ?')
+    .get(caseId) as { school: string } | undefined;
+  if (row && row.school !== school.schoolId) {
+    refuse(db, actor, caseId, 'school_confirmed', `the child is registered at ${row.school}, not ${school.schoolId}`);
+  }
+}
+
+/** Evidence must name a registered volunteer or teacher, so nobody can attribute a visit that never happened. */
+function requireCapturer(db: DatabaseSync, evidence: EvidenceInput): void {
+  const capturer = db.prepare('SELECT role FROM staff WHERE id = ?').get(evidence.capturedBy) as { role: string } | undefined;
+  if (!capturer || capturer.role !== evidence.capturedByRole) {
+    throw new UnknownCapturerError(evidence.capturedBy, evidence.capturedByRole);
+  }
+}
+
+export interface RefusedAction {
+  id: number;
+  actorId: string;
+  actorRole: string;
+  target: string;
+  attempted: string;
+  reason: string;
+  at: string;
+}
+
+/** Refused actions, newest first. */
+export function listRefusedActions(db: DatabaseSync): RefusedAction[] {
+  return (db.prepare('SELECT * FROM refused_actions ORDER BY id DESC').all() as unknown as Record<string, any>[]).map(
+    (r) => ({ id: r.id, actorId: r.actor_id, actorRole: r.actor_role, target: r.target, attempted: r.attempted, reason: r.reason, at: r.at }),
+  );
+}
 
 const ISO_8601 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
 
@@ -204,16 +370,19 @@ function lastRoundEvent(db: DatabaseSync, roundId: string): { type: string; at: 
 export function createRound(
   db: DatabaseSync,
   round: { id: string; name: string; ward: string; currency: string; budget: number },
+  actor: Actor,
   at: string = now(),
 ): void {
+  requireRole(db, actor, round.id, 'create_round');
   checkTimestamp(at);
-  db.prepare('INSERT INTO rounds (id, name, ward, currency, budget, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
-    round.id, round.name, round.ward, round.currency, round.budget, at,
-  );
+  db.prepare(
+    'INSERT INTO rounds (id, name, ward, currency, budget, actor_id, actor_role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(round.id, round.name, round.ward, round.currency, round.budget, actor.id, actor.role, at);
 }
 
 export function openRound(db: DatabaseSync, roundId: string, actor: Actor, at: string = now()): void {
   const round = requireRound(db, roundId);
+  requireRole(db, actor, roundId, 'open_round');
   const last = lastRoundEvent(db, roundId);
   if (last?.type === 'opened') throw new RoundStateError(roundId, 'already open');
   if (last?.type === 'closed') throw new RoundStateError(roundId, 'closed rounds cannot reopen');
@@ -225,6 +394,7 @@ export function openRound(db: DatabaseSync, roundId: string, actor: Actor, at: s
 
 export function closeRound(db: DatabaseSync, roundId: string, actor: Actor, at: string = now()): void {
   requireRound(db, roundId);
+  requireRole(db, actor, roundId, 'close_round');
   const last = lastRoundEvent(db, roundId);
   if (last?.type !== 'opened') throw new RoundStateError(roundId, 'only an open round can be closed');
   checkTimestamp(at, last.at);
@@ -360,9 +530,12 @@ export function createCase(
   input: { roundId: string; childId: string; evidence: EvidenceInput; actor: Actor },
   at: string = now(),
 ): string {
+  requireRound(db, input.roundId);
+  // Role first: a wrong-role attempt is logged even if something else about it is also wrong.
+  requireRole(db, input.actor, input.roundId, 'apply');
   checkTimestamp(at);
+  requireCapturer(db, input.evidence);
   return transaction(db, () => {
-    requireRound(db, input.roundId);
     const opened = lastRoundEvent(db, input.roundId);
     if (opened?.type !== 'opened') throw new RoundNotOpenError(input.roundId);
     checkTimestamp(at, opened.at);
@@ -392,7 +565,9 @@ export function correctCase(
   input: { evidence: EvidenceInput; reason: string; actor: Actor },
   at: string = now(),
 ): string {
+  if (getCaseRow(db, originalCaseId)) requireRole(db, input.actor, originalCaseId, 'correct');
   checkTimestamp(at);
+  requireCapturer(db, input.evidence);
   return transaction(db, () => {
     const original = getCaseRow(db, originalCaseId);
     if (!original) throw new CaseNotFoundError(originalCaseId);
@@ -456,15 +631,35 @@ export function recordStage(
   at: string = now(),
   note?: string,
 ): void {
-  if (!(STAGES as readonly string[]).includes(stage) || stage === 'approved') throw new InvalidStageError(stage);
+  // `applied` is only ever written by createCase/correctCase; `approved` needs an amount (recordAward).
+  if (!(STAGES as readonly string[]).includes(stage) || stage === 'approved' || stage === 'applied') {
+    throw new InvalidStageError(stage);
+  }
+  const action = stage as Exclude<Stage, 'applied' | 'approved'>;
+  // Role rules run before the transaction, so a refusal is logged even though nothing else is written.
+  if (getCaseRow(db, caseId)) {
+    const resolved = requireRole(db, actor, caseId, action);
+    if (action === 'school_confirmed') requireOwnSchool(db, actor, resolved, caseId);
+  }
+  const reason = note?.trim() || null;
   transaction(db, () => {
-    prepareTransition(db, caseId, stage as Stage, at);
-    insertEvent(db, caseId, stage as Stage, actor, at, note ?? null, null);
+    prepareTransition(db, caseId, action, at);
+    // Checked after the lifecycle rules, so an impossible rejection reports why it is impossible.
+    if (action === 'rejected') {
+      if (!reason) throw new MissingReasonError(caseId);
+      if (reason.length > MAX_REASON_LENGTH) {
+        throw new MissingReasonError(caseId, `needs a reason of at most ${MAX_REASON_LENGTH} characters, to fit the parent's SMS`);
+      }
+      const foreign = nonGsmCharacters(reason);
+      if (foreign.length) throw new MissingReasonError(caseId, `needs a reason in plain characters an SMS can carry (not ${foreign.join(' ')})`);
+    }
+    insertEvent(db, caseId, action, actor, at, reason, null);
   });
 }
 
 /** Records the `approved` stage with the awarded amount, within the round's budget. */
 export function recordAward(db: DatabaseSync, caseId: string, amount: number, actor: Actor, at: string = now()): void {
+  if (getCaseRow(db, caseId)) requireRole(db, actor, caseId, 'approved');
   if (!Number.isSafeInteger(amount) || amount <= 0) throw new InvalidAmountError(amount);
   transaction(db, () => {
     const row = prepareTransition(db, caseId, 'approved', at);

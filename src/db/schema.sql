@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS rounds (
   ward       TEXT NOT NULL CHECK (length(trim(ward)) > 0),
   currency   TEXT NOT NULL CHECK (length(trim(currency)) > 0),
   budget     INTEGER NOT NULL CHECK (typeof(budget) = 'integer' AND budget >= 0),
+  actor_id   TEXT NOT NULL CHECK (length(trim(actor_id)) > 0),
+  actor_role TEXT NOT NULL CHECK (actor_role = 'clerk'),
   created_at TEXT NOT NULL
 );
 
@@ -101,6 +103,37 @@ CREATE TABLE IF NOT EXISTS case_events (
   at         TEXT NOT NULL,
   CHECK ((stage = 'approved') = (amount IS NOT NULL))
 );
+
+-- Staff who act on cases. The role recorded on every event is looked up here, never taken from a form.
+-- Like the rest of the registry this is editable (people change jobs); identity itself is on trust
+-- in the proof of concept, which has no login.
+CREATE TABLE IF NOT EXISTS staff (
+  id        TEXT PRIMARY KEY,
+  name      TEXT NOT NULL CHECK (length(trim(name)) > 0),
+  role      TEXT NOT NULL CHECK (role IN ('chv', 'teacher', 'clerk', 'committee', 'school')),
+  school_id TEXT REFERENCES schools(id),
+  CHECK ((role = 'school') = (school_id IS NOT NULL))
+);
+
+-- Every action the role rules refused: who tried, what, on which case or round, and why.
+-- Append-only, so a refusal cannot be quietly removed.
+CREATE TABLE IF NOT EXISTS refused_actions (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor_id   TEXT NOT NULL CHECK (length(trim(actor_id)) > 0),
+  actor_role TEXT NOT NULL,
+  target     TEXT NOT NULL CHECK (length(trim(target)) > 0),
+  attempted  TEXT NOT NULL CHECK (length(trim(attempted)) > 0),
+  reason     TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+  at         TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS refused_actions_no_update BEFORE UPDATE ON refused_actions
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+CREATE TRIGGER IF NOT EXISTS refused_actions_no_delete BEFORE DELETE ON refused_actions
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+CREATE TRIGGER IF NOT EXISTS refused_actions_no_replace BEFORE INSERT ON refused_actions
+WHEN EXISTS (SELECT 1 FROM refused_actions WHERE id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
 
 -- A request is append-only like everything else; when resolution is added it belongs in a
 -- companion events table, never as a mutable column here.
@@ -217,6 +250,42 @@ BEGIN SELECT RAISE(IGNORE); END;
 CREATE TRIGGER IF NOT EXISTS message_attempts_no_replace BEFORE INSERT ON message_attempts
 WHEN EXISTS (SELECT 1 FROM message_attempts WHERE id = NEW.id)
 BEGIN SELECT RAISE(ABORT, 'immutable record'); END;
+
+-- The role map, enforced by the database for every connection — a plain sqlite3 session cannot
+-- record a stage under the wrong role, or as someone who is not registered. (The store checks the
+-- same rules first and logs refusals; these guards are the backstop for anyone who bypasses it.)
+CREATE TRIGGER IF NOT EXISTS case_events_role_map BEFORE INSERT ON case_events
+WHEN NOT (
+  (NEW.stage = 'applied' AND (
+     (NEW.actor_role = 'parent' AND EXISTS (SELECT 1 FROM households WHERE id = NEW.actor_id)) OR
+     (NEW.actor_role IN ('clerk', 'chv', 'teacher') AND EXISTS (SELECT 1 FROM staff WHERE id = NEW.actor_id AND role = NEW.actor_role))))
+  OR (NEW.stage = 'verified' AND NEW.actor_role IN ('chv', 'teacher')
+      AND EXISTS (SELECT 1 FROM staff WHERE id = NEW.actor_id AND role = NEW.actor_role))
+  OR (NEW.stage IN ('rejected', 'approved') AND NEW.actor_role = 'committee'
+      AND EXISTS (SELECT 1 FROM staff WHERE id = NEW.actor_id AND role = 'committee'))
+  OR (NEW.stage = 'disbursed' AND NEW.actor_role = 'clerk'
+      AND EXISTS (SELECT 1 FROM staff WHERE id = NEW.actor_id AND role = 'clerk'))
+  OR (NEW.stage = 'school_confirmed' AND NEW.actor_role = 'school' AND EXISTS (
+      SELECT 1 FROM staff s JOIN cases c ON c.id = NEW.case_id JOIN children ch ON ch.id = c.child_id
+      WHERE s.id = NEW.actor_id AND s.role = 'school' AND s.school_id = ch.school_id))
+)
+BEGIN SELECT RAISE(ABORT, 'role not permitted'); END;
+
+-- An award can never take a round past its budget, whoever writes it.
+CREATE TRIGGER IF NOT EXISTS case_events_within_budget BEFORE INSERT ON case_events
+WHEN NEW.stage = 'approved' AND (
+  SELECT COALESCE(SUM(e.amount), 0) FROM case_events e JOIN cases c ON c.id = e.case_id
+  WHERE e.stage = 'approved' AND c.round_id = (SELECT round_id FROM cases WHERE id = NEW.case_id)
+) + NEW.amount > (SELECT r.budget FROM rounds r JOIN cases c ON c.round_id = r.id WHERE c.id = NEW.case_id)
+BEGIN SELECT RAISE(ABORT, 'over budget'); END;
+
+CREATE TRIGGER IF NOT EXISTS round_events_role_map BEFORE INSERT ON round_events
+WHEN NOT (NEW.actor_role = 'clerk' AND EXISTS (SELECT 1 FROM staff WHERE id = NEW.actor_id AND role = 'clerk'))
+BEGIN SELECT RAISE(ABORT, 'role not permitted'); END;
+
+CREATE TRIGGER IF NOT EXISTS rounds_role_map BEFORE INSERT ON rounds
+WHEN NOT EXISTS (SELECT 1 FROM staff WHERE id = NEW.actor_id AND role = 'clerk')
+BEGIN SELECT RAISE(ABORT, 'role not permitted'); END;
 
 CREATE TRIGGER IF NOT EXISTS cases_no_update BEFORE UPDATE ON cases
 BEGIN SELECT RAISE(ABORT, 'immutable record'); END;

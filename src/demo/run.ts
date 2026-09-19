@@ -14,7 +14,9 @@ import { roundsWaited } from '../scoring/priority.ts';
 import { OPEN_ROUND_SKIPPED, seedDatabase } from '../seed/data.ts';
 import { USSD_CODE, dispatch, listMessages } from '../sms/dispatch.ts';
 import { recordingSender } from '../sms/senders.ts';
-import { correctCase, getCase, getCaseHistory, listCurrentCases, recordAward, recordStage } from '../store/cases.ts';
+import {
+  correctCase, getCase, getCaseHistory, listCurrentCases, listRefusedActions, recordAward, recordStage,
+} from '../store/cases.ts';
 import { MAX_SCREEN, renderReply, respond } from '../ussd/session.ts';
 
 const ROOT = resolve(import.meta.dirname, '../..');
@@ -73,10 +75,10 @@ try {
   const household = need(
     store
       .prepare(
-        `SELECT c.name AS child, c.school_id AS school, h.phone AS phone, h.language AS language
+        `SELECT c.name AS child, c.school_id AS school, h.id AS id, h.phone AS phone, h.language AS language
          FROM children c JOIN households h ON h.id = c.household_id WHERE c.id = ?`,
       )
-      .get(demoChild) as { child: string; school: string; phone: string; language: 'sw' | 'en' } | undefined,
+      .get(demoChild) as { child: string; school: string; id: string; phone: string; language: 'sw' | 'en' } | undefined,
     `household of ${demoChild}`,
   );
 
@@ -154,8 +156,17 @@ try {
 
   // ── Act 4 ──────────────────────────────────────────────────────────────────
   act(4, 'Every decision reaches them, ending with the school confirming the money');
-  console.log(`\n  (Simulated: this script records the volunteer, committee, clerk and school steps.`);
-  console.log(`   Their own screens are stories 6 and 7, which are not built.)`);
+  console.log(`\n  Each step is taken by the role that owns it — the same rules the staff dashboard enforces.`);
+  let refusal = '';
+  try {
+    recordStage(store, caseId, 'verified', { id: household.id, role: 'parent' });
+  } catch (err) {
+    refusal = err instanceof Error ? err.message : String(err);
+  }
+  console.log(`\n  The parent tries to verify their own case:\n  Refused: ${refusal}`);
+  check('a parent cannot vouch for their own need', refusal.includes('may not verify a case'));
+  const logged = listRefusedActions(store)[0];
+  check('the refusal is on the permanent record', logged?.actorId === household.id && logged.target === caseId);
   recordStage(store, caseId, 'verified', CHV);
   recordAward(store, caseId, 12_000, COMMITTEE);
   recordStage(store, caseId, 'disbursed', CLERK);
