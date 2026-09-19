@@ -51,7 +51,7 @@ I built Zamu alone, using **BMAD Method skills inside Claude Code**. The idea is
 
 **Idea.** I ran BMAD's brainstorming skill in *facilitator* mode, where the AI only asks questions and supplies no ideas. First Principles, the Five Whys and the Disney Method took me from "parents don't know about bursaries" to the two root causes above, and to the public turn-queue as the answer to both. In that session the AI's only suggestion was the name, when I asked for one; *Zamu* is Swahili for *turn*, and I kept it.
 
-**Plan.** BMAD's spec skill turned the session into a specification of eleven capabilities, split into Must, Should and Could. I cut it to five Musts for a four-day build and settled every open question myself, often choosing between options the AI laid out with their trade-offs:
+**Plan.** BMAD's spec skill turned the session into a specification of eleven capabilities, split into Must, Should and Could. I cut it to five Musts for a four-day build, added the staff dashboard and its role rules once those were done, and settled every open question myself, often choosing between options the AI laid out with their trade-offs:
 
 - which scoring inputs count and how much;
 - +10 per round waited;
@@ -59,7 +59,7 @@ I built Zamu alone, using **BMAD Method skills inside Claude Code**. The idea is
 - consent before any application;
 - that land over two acres scores the same with or without a title deed, so hiding paperwork cannot raise a score.
 
-**Build and review.** Each story went through the same loop: the AI wrote a plan, I approved or changed it, it implemented the plan with tests, and then **three independent reviewer agents** examined the change. One reviewed it blind, one traced edge cases, and one mutated the code to prove which tests could not fail. Every finding was checked against the code and logged with a verdict. Across six stories that came to 196 findings: 153 fixed, 14 deferred with reasons, 22 rejected with evidence, and 7 escalated to me as decisions only I could make.
+**Build and review.** Each story went through the same loop: the AI wrote a plan, I approved or changed it, it implemented the plan with tests, and then **three independent reviewer agents** examined the change. One reviewed it blind, one traced edge cases, and one mutated the code to prove which tests could not fail. Every finding was checked against the code and logged with a verdict. Across seven stories that came to 224 findings: 179 fixed, 16 deferred with reasons, 22 rejected with evidence, and 7 escalated to me as decisions only I could make.
 
 That review loop is why I trust the result. It caught:
 
@@ -67,10 +67,11 @@ That review loop is why I trust the result. It caught:
 - a uniqueness rule that never applied to databases created before it;
 - 60 SMS announcing closed rounds as open;
 - a parent told they were in "place 0";
+- a clerk who could vouch for a family's need by claiming to be a volunteer, because the store believed whatever role a caller gave;
 - tests that passed whatever the code did.
 
-It also disproved two fixes the AI had reported as done — the uniqueness rule and the child menu — a reminder that the AI's account of its own work needed checking too.
+It also disproved two fixes the AI had reported as done — the uniqueness rule and the child menu — a reminder that the AI's account of its own work needed checking too. Passing tests were not the last word either: with all 220 green, the staff dashboard refused its own form in a real browser, because a privacy header made the browser hide where the form came from. A test now sends the headers a real browser sends.
 
 The full trail is in the repository under `_bmad-output/`: the brainstorming session, the specification, and one spec per story with its complete review log.
 
-**Result.** About 2,800 lines of TypeScript with 189 tests, no runtime dependencies beyond Node's built-in SQLite, and a five-act demo that asserts its own story as it runs.
+**Result.** About 3,550 lines of TypeScript with 221 tests, no runtime dependencies beyond Node's built-in SQLite, a staff dashboard that runs a round end to end, and a five-act demo that asserts its own story as it runs.
